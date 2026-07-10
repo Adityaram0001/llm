@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+wandb/
+
+# heavy artifacts — the lab record is configs + metrics + notes, not binaries
+data/raw/
+data/clean/supplement/
+data/tokenized/**/*.bin
+checkpoints/
+experiments/**/ckpt/
+tools/data_factory/inbox/
+tools/data_factory/outbox/
+additionals/

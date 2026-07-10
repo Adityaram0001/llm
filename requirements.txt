@@ -1,0 +1,31 @@
+# Core — keep lean; every addition gets a DECISIONS.md note.
+torch>=2.7,<3          # MPS backend; bf16 autocast support
+numpy>=1.26,<3
+pyyaml>=6.0
+tqdm>=4.66
+rich>=13.0             # pretty console logging in trainers
+psutil>=5.9            # RAM tracking during training
+
+# Tokenizers & reference models
+tokenizers>=0.20       # HF fast BPE (Part B of phase 2)
+transformers>=4.48     # ONLY for tokenizer/model comparisons, never for our model code
+datasets>=3.0          # optional supplement corpora (TinyStories etc.)
+
+# Tracking & analysis
+wandb>=0.18
+pandas>=2.2
+matplotlib>=3.9
+
+# Notebooks
+jupyter
+ipykernel
+ipywidgets
+
+# Data pipeline
+requests>=2.32
+beautifulsoup4>=4.12   # Gutenberg page parsing if needed
+regex>=2024.0          # GPT-2 style pre-tokenization patterns
+langdetect>=1.0.9      # data-factory validation
+
+# Dev
+pytest>=8.0
