@@ -150,4 +150,76 @@ must stay same-hardware; tokens-based curves remain comparable across machines.
 **Revisit if:** first real cloud run measures very different $/token than estimated, or
 spot-instance interruptions prove painful (then: on-demand only, or chunked WSD-style runs).
 
-<!-- Append new decisions below. Next ID: D-011 -->
+## D-011 — Book corpus: 112-book philosophy/classics selection via Gutenberg catalog  (2026-07-10, phase 1)
+**Decision:** Final book list = 112 Project Gutenberg texts (~14.9M est. tokens post-cleaning),
+listed in `configs/corpus.yaml`. User specified 20 seed authors (Marcus Aurelius, Seneca,
+Epictetus, Lao Tzu, Confucius, Plato, Aristotle, Emerson, Thoreau, Sun Tzu, Descartes, Locke,
+Spinoza, Schopenhauer, William James, Bacon, Montaigne, Voltaire, Rousseau, Mill), then
+delegated the rest ("add 100 more books you decide, same genre; if still under 15M tokens add
+50 more"). Rather than hand-picking 100+ titles from memory (real hallucination risk on
+Gutenberg IDs at that scale), downloaded Gutenberg's full catalog metadata
+(`pg_catalog.csv`, ~90k rows) as ground truth: filtered to English-language works in the
+"Category: Philosophy & Ethics" bookshelf (2,519 candidates), then curated ~90 additional
+works from ~23 canonical philosophers not yet covered (Kant, Hume, Hegel, Nietzsche, Hobbes,
+Berkeley, Adam Smith, Burke, Paine, Pascal, Cicero, Plutarch, Boethius, Augustine, Machiavelli,
+Erasmus, Xenophon, Diogenes Laertius, Zhuangzi, Dewey, Spencer, Santayana, Russell) plus
+second/third works by several seed authors (more Plato dialogues, Aristotle's Politics/Poetics,
+etc.). Verified real file sizes via HTTP HEAD on all 112 URLs before finalizing — estimated
+~15.6M tokens (bytes/4), already over the 15M target, so the "+50 more" contingency wasn't
+triggered.
+
+Per-author calls flagged by research and resolved by user: **Seneca** — Aubrey Stewart's direct
+translation of the Minor Dialogues (GB 64576), not L'Estrange's 17th-c. condensed paraphrase.
+**Descartes** — both Discourse on Method (GB 59) and the separately-published Six Metaphysical
+Meditations (GB 70091); no single GB text bundles them. **Locke** — both volumes of An Essay
+Concerning Human Understanding (GB 10615 + 10616), not the shorter Second Treatise.
+
+Held out as whole-document val split (never seen in training): Boethius' *Consolation of
+Philosophy* (GB 14328) and Epictetus' *Enchiridion* (GB 45109) — both short, self-contained,
+not part of any multi-volume split.
+**Options considered:** (a) hand-pick from memory — rejected, high risk of wrong/hallucinated
+Gutenberg IDs at this scale; (b) programmatic catalog-based selection — chosen, every ID
+verified to exist and match its title before download.
+**Why:** Matches phase-1's requirement for a repeatable, verifiable build; catalog-driven
+selection scales to "however many books" without a manual-research bottleneck while still
+respecting the user's stated genre.
+**Revisit if:** user wants to prune the auto-selected ~90 further, or wants other genres added.
+
+## D-012 — Dictionary source: GNU GCIDE tarball, not raw Gutenberg Webster's text  (2026-07-10, phase 1)
+**Decision:** Downloaded the canonical GNU GCIDE distribution (`gcide-0.53.tar.xz` from
+ftp.gnu.org, ~14MB, 23 letter files) rather than Project Gutenberg's own "Webster's Unabridged
+Dictionary" text (GB 247/660-673, OCR'd free-form text). Parsed GCIDE's SGML-tagged entries
+(`<p><ent>WORD</ent>...<hw>...</hw> <pos>...</pos> <def>...</def></p>`) with targeted regex —
+not a real XML parser, since GCIDE's tags are unclosed self-closing style (`<br/`, `<ae/`),
+which is invalid XML. 119,984 entries parsed. Bold-term prose template per user's choice
+(`**word** (pos): def1; def2.`). 2% of entries (3,259) held out as val
+(`random.Random(42)` shuffle, restored to alphabetical order within each split).
+**Options considered:** (a) raw Gutenberg Webster's text — free-form OCR, no structured
+word/pos/definition boundaries, fragile heuristic parsing; (b) GNU GCIDE tarball — same
+underlying Webster's 1913 base text plus WordNet 1.5 supplement, already tagged per-entry.
+Chose (b).
+**Why:** GCIDE is what D-003 named as the target source; the tagged format parses far more
+reliably than OCR'd text, and yields a clean structured `dictionary.jsonl` for eval-probe use
+(phase 6/7) essentially for free.
+**Bug caught during build:** GCIDE's `<hw>` tag carries pronunciation/stress markup (backticks,
+quote marks, e.g. `` Ab"sinth` ``) meant for syllabification, not the clean headword — an
+initial version preferred `<hw>` and leaked stress marks plus unclosed entity tags (`<ae/>` for
+æ, etc.) into headwords. Fixed to prefer `<ent>` (the clean form), `<hw>` only as fallback, plus
+a sweep for leftover unclosed self-closing tags.
+**Revisit if:** WordNet-sourced entries (modern vocabulary mixed into GCIDE alongside 1913
+Webster) prove undesirable for a "period" feel — could filter by the `<source>` tag to
+1913-Webster-only entries.
+
+## D-013 — TinyStories supplement downloaded in phase 1, not deferred  (2026-07-10, phase 1)
+**Decision:** Downloaded `roneneldan/TinyStories` (HF `datasets`, streamed row-by-row to
+`data/clean/supplement/tinystories.txt`, never accumulated in a Python list) now rather than
+deferring to phase 4/5/9. Actual size: 2.12M stories, ~372M words, ~1.8GB on disk (~475-533M
+tokens depending on estimator) — under CLAUDE.md's 2GB ask-first threshold but closer to it
+than the ballpark given when the user approved ("~500MB-1GB" at the time of asking).
+**Why:** User explicitly chose "download now"; actual size came in larger than estimated but
+still under the 2GB threshold, so no separate re-confirmation was sought.
+**Revisit if:** disk pressure becomes an issue (unlikely against the 512GB budget) or the
+supplement mixing ratio needs tuning — it's stored separately today, not mixed into the
+books:dictionary training stream (see `configs/corpus.yaml` `supplement.tinystories`).
+
+<!-- Append new decisions below. Next ID: D-014 -->
