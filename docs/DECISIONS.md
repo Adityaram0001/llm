@@ -75,4 +75,62 @@ lesson, phase 5 studies it explicitly), but the hero run needs more tokens to be
 via `pyproject.toml`. Scripts in `scripts/` for anything long-running; notebooks for exploration.
 **Why:** venv was a user requirement; src-layout keeps notebook imports honest.
 
-<!-- Append new decisions below. Next ID: D-008 -->
+## D-008 — Compute budget: measured MPS throughput (2026-07-10, phase 0)
+**Decision:** Use these measured numbers (M4, `torch==2.13.0`) to calibrate every later time
+estimate. Bench: `scripts/bench_mps.py`, TinyGPT ~9.1M params (6 layer, d_model=256, n_head=4,
+manual QKV + `F.scaled_dot_product_attention`, bf16 autocast, weight-tied embeddings).
+
+**Matmul TFLOPS (square, bf16):** ~3.5–3.8 TFLOPS across 1k–4k. fp32 is ~1.9–3.3 TFLOPS — bf16
+autocast gives a real, if modest, speedup on this GPU; nowhere near quoted M4 peak FLOPS because
+this is unfused eager-mode matmul, not a tuned kernel.
+
+**TinyGPT (~9.1M params) fwd+bwd tokens/sec, best-per-seq_len (sweet-spot micro-batch):**
+| seq_len | micro-batch | tokens/sec | mps_alloc |
+|---------|-------------|------------|-----------|
+| 256     | 16          | ~23,800    | 160MB     |
+| 512     | 8           | ~20,800    | 163MB     |
+| 1024    | 16          | ~15,500    | 548MB     |
+
+CPU comparison (bs=4, seq=256): MPS ~22,500 tok/s vs CPU ~15,700 tok/s — MPS wins but by a much
+smaller margin than expected for a discrete GPU; at this tiny scale kernel-launch overhead and
+unified-memory traffic dominate over raw compute.
+
+**Important finding — throughput cliff well below any advertised memory ceiling:** sweeping
+micro-batch size does NOT degrade gracefully into a clean OOM. Tokens/sec is flat (~20-24k)
+across most of the batch sweep, then falls off a cliff (3-15x slower) at a specific
+`mps_alloc` size *before* a hard `RuntimeError` OOM ever fires — e.g. seq=512 dropped from
+20,802→1,922 tok/s going bs=32→64 (mps_alloc 535MB→1037MB); seq=1024 dropped from 15,485→1,435
+tok/s going bs=16→32 (mps_alloc 548MB→1037MB). This ceiling (~1GB `mps_alloc`) is nowhere close
+to either total system RAM (16GB) or `torch.mps.recommended_max_memory()` (12.7GB reported) —
+it looks like an MPS allocator/Metal-heap fragmentation effect, not a real capacity limit.
+**Practical rule:** tune micro-batch to the plateau, not to the edge of what fits — there is no
+warning between "fine" and "10x slower," and it arrives well before an actual OOM crash.
+
+**Estimated wall-clock (fwd+bwd only, no optimizer/data/logging overhead — treat as an optimistic
+floor, real scripts will be slower):**
+- 10M-tier model × 100M tokens, seq_len 512 @ ~20.8k tok/s → ~4,800s ≈ **1.3 hours**.
+- 100M-tier model × 1B tokens: FLOPs scale ~linearly with params (Chinchilla-style 6ND), so
+  extrapolate tok/sec down by ~11x (100M/9.1M) → ~1,900 tok/s → 1e9/1900 ≈ 528,000s ≈ **~6.1
+  days**, before adding optimizer-step, data-loading, and checkpoint overhead.
+**Why this matters:** D-001 assumed the 100M "hero run" takes 1-3 days; D-006 assumed ~2B
+Chinchilla-optimal tokens for the 100M model. Those two assumptions are in tension with this
+measurement — 1B tokens alone extrapolates to ~6 days of pure compute, so 2B tokens end-to-end
+is more likely **1.5-3 weeks**, not "1-3 days." Flagged to the user; not resolved here.
+**Revisit if:** phase 4's first real training script measures actual (optimizer-included)
+tokens/sec at the true model size — replace this extrapolation with a direct measurement, and
+revisit D-001/D-006's token budget or timeline expectations if the gap holds.
+
+## D-009 — Torch version and wandb default mode (2026-07-10, phase 0)
+**Decision:** `torch==2.13.0` (latest stable satisfying the pinned `requirements.txt` range
+`>=2.7,<3`), installed via `scripts/setup.sh` — includes recent MPS backend fixes over 2.7 baseline.
+wandb defaults to **offline mode** (`WANDB_MODE=offline` set in training scripts); `wandb sync`
+can push a run later if the user wants the hosted dashboard.
+**Options considered:** wandb online-by-default — needs `wandb login` + connectivity on every
+run; offline-by-default — zero-setup, matches D-005 ("wandb can be offline; local files are
+the source of truth"), user can sync selectively.
+**Why:** User confirmed offline-by-default. Removes a login dependency from every training
+script and keeps local `metrics.jsonl` as the always-available record.
+**Revisit if:** user wants live remote monitoring during long runs (e.g. the multi-day 100M
+hero run in D-008) — flip the default or sync proactively for that specific run.
+
+<!-- Append new decisions below. Next ID: D-010 -->

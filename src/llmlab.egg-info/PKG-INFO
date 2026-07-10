@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: llmlab
+Version: 0.1.0
+Summary: LLM-Lab: build and study a ~100M-param LLM on Apple Silicon
+Requires-Python: >=3.11
