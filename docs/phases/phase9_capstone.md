@@ -14,10 +14,15 @@ learned.
    ≥1B tokens seen. Re-verify tokenized shards.
 3. **Dry run:** 30-min L-tier smoke at hero settings; verify tok/s, memory headroom (<12GB RSS),
    checkpoint size, ETA math. Present ETA to user for go/no-go.
-4. **Hero run:** launch via `caffeinate -is python scripts/train.py ...` in terminal (laptop
-   plugged in, lid open or `caffeinate` handles it; user closes other apps). WSD schedule
-   recommended (mid-run decay branches = free intermediate models). Monitor via wandb phone
-   app if desired. Resume-on-interrupt is already battle-tested (P4) — interruptions are fine.
+4. **Hero run — pick venue with the user (D-010):**
+   - **Rented RTX 5090 (recommended):** follow `docs/CLOUD.md` end-to-end (sync up, tmux,
+     wandb online, periodic sync_down, STOP pod). Expect overnight-ish, ~$10–20. If it's the
+     user's first rental, do the $1 practice run first.
+   - **Local Mac:** `caffeinate -is python scripts/train.py ...` in terminal, other apps
+     closed; expect 1.5–3 weeks at the D-006 token budget (D-008) — only sane with a reduced
+     budget or WSD checkpoints along the way.
+   WSD schedule recommended either way (mid-run decay branches = free intermediate models).
+   Resume-on-interrupt is battle-tested (P4) — interruptions are fine.
 5. **Post:** full eval suite; SFT + (optional) DPO on top; chat demo; side-by-side vs the
    S-tier baseline from phase 4 (the "how far we came" table).
 6. **Final report — `docs/results/final_report.md`:**

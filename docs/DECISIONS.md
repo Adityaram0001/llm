@@ -133,4 +133,21 @@ script and keeps local `metrics.jsonl` as the always-available record.
 **Revisit if:** user wants live remote monitoring during long runs (e.g. the multi-day 100M
 hero run in D-008) — flip the default or sync proactively for that specific run.
 
-<!-- Append new decisions below. Next ID: D-010 -->
+## D-010 — Hybrid compute: Mac primary, rented RTX 5090 burst option  (2026-07-10, planning)
+**Decision:** Keep the M4 Mac as the primary lab (all dev, notebooks, S-tier ablations). Add
+rented cloud GPUs (RunPod recommended; gpuhub also fine; RTX 5090 class) as an *optional* burst
+target for M/L-tier confirmations and the phase-9 hero run. Full playbook: `docs/CLOUD.md`;
+helper scripts: `scripts/cloud/` (sync_up / remote_setup / sync_down). All project code must be
+device-agnostic per CLOUD.md's portability rules (`get_device()` = cuda > mps > cpu,
+`autocast_ctx()`, guarded backend calls, config-keyed DataLoader settings).
+**Options considered:** (a) Mac-only — D-008 showed the 100M×2B-token hero run ≈ 1.5–3 weeks:
+technically possible, practically miserable; (b) cloud-only — loses the always-free local loop
+and the MPS learning angle; (c) hybrid — free fast iteration locally, ~$10–20 overnight hero run.
+**Why:** A 5090 (~32GB VRAM, ~100+ bf16 TFLOPS vs the M4's measured ~3.6) is roughly 30–60×
+effective throughput once torch.compile/bigger batches are on; the D-008 tension (hero-run
+timeline vs token budget) dissolves for the cost of a dinner. Ablation wall-clock comparisons
+must stay same-hardware; tokens-based curves remain comparable across machines.
+**Revisit if:** first real cloud run measures very different $/token than estimated, or
+spot-instance interruptions prove painful (then: on-demand only, or chunked WSD-style runs).
+
+<!-- Append new decisions below. Next ID: D-011 -->

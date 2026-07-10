@@ -7,6 +7,11 @@ ablation lab is just "new config, `python scripts/train.py`".
 
 ## Deliverables
 
+0. **Portability requirement (D-010):** the whole engine must run unchanged on MPS (local)
+   and CUDA (rented pod) — follow `docs/CLOUD.md` rules: `get_device()`/`autocast_ctx()` from
+   `llmlab.utils`, DataLoader `num_workers`/`pin_memory` as config keys, `map_location` on
+   load, TF32 + optional `compile: true` config flag for CUDA. Acceptance: `--device cpu`
+   smoke test passes (that's the portability canary without renting anything).
 1. **`src/llmlab/data/loader.py`** — memmap dataset: random-offset contiguous slices of
    `train.bin` → `(x, y)` next-token pairs; deterministic given seed+step (needed for exact
    ablation comparability); optional doc-boundary-respecting mode (default: plain

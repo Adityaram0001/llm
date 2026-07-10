@@ -7,9 +7,10 @@
 **Last session:** 2026-07-10 — Phase 0 completed: venv + deps installed, `llmlab` editable
 install verified, MPS/bf16/SDPA/wandb all check out (`scripts/verify_env.py`), throughput
 benchmarked (`scripts/bench_mps.py`, see D-008), guided notebook done.
-**Open blockers:** none. **Flag for user attention:** D-008 found the 100M/2B-token hero run
-likely takes ~1.5-3 weeks of compute, not the "1-3 days" assumed in D-001 — worth revisiting
-the token budget or timeline before phase 9.
+**Open blockers:** none. The D-008 flag (hero run ≈ 1.5–3 weeks on the Mac) is resolved in
+principle by **D-010**: rented RTX 5090 as burst compute for M/L-tier runs (playbook
+`docs/CLOUD.md`, scripts in `scripts/cloud/`). Final go/no-go + provider choice happens when
+the first big run is actually needed (phase 4 M-tier or phase 9).
 
 ## Phase status
 
@@ -48,5 +49,8 @@ _(none yet — phase 0 was environment setup, no training runs)_
 - Micro-batch guidance from D-008 (for whenever phase 4 needs training defaults): at seq_len 512
   the throughput plateau is around micro-batch 8-16; don't push batch size to the edge of what
   fits in MPS memory — there's a cliff (3-15x slowdown) well before a real OOM.
-- Unresolved tension flagged in D-008: 100M-hero-run timeline (D-001) vs. Chinchilla token
-  budget (D-006) — surfaced to user, not yet decided. Revisit before committing to phase 9 scope.
+- D-008 timeline tension resolved by D-010 (cloud burst option). From phase 4 onward, ALL
+  training code must follow `docs/CLOUD.md` portability rules (device via
+  `llmlab.utils.get_device()`/`autocast_ctx()` — already updated to be cuda>mps>cpu aware).
+  The user has never rented a GPU: when the first cloud run comes up, walk CLOUD.md step by
+  step and suggest the $1 practice rental first.

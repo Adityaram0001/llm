@@ -15,8 +15,10 @@ carries state between chats.
   **activations** and throughput are the real constraints on 16GB/MPS.
 - Rough M4 expectation (phase 0 measures the truth): S-tier 10M ≈ 15–40k tok/s,
   L-tier 100M ≈ 2–6k tok/s at seq 512, bf16.
-- Chinchilla-optimal for 100M ≈ 2B tokens ≈ multi-day. Hence decision D-001: ablate at 10M
-  (a 100M-token run ≈ 1–2h), confirm at 30–50M, one hero run at 100M.
+- Chinchilla-optimal for 100M ≈ 2B tokens ≈ weeks on the Mac (measured, D-008). Hence D-001
+  (ablate at 10M ≈ 1–2h per run, confirm at 30–50M) **plus D-010**: big runs can burst to a
+  rented RTX 5090 (~30–60× throughput, ~$1/hr — hero run overnight for ~$10–20). Playbook:
+  `docs/CLOUD.md`. All code stays device-agnostic (mps/cuda/cpu) so local↔cloud is friction-free.
 
 ## Phases
 

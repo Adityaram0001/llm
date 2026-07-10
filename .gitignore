@@ -14,3 +14,4 @@ experiments/**/ckpt/
 tools/data_factory/inbox/
 tools/data_factory/outbox/
 additionals/
+scripts/cloud/remote.env

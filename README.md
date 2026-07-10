@@ -18,6 +18,7 @@ DPO, …), with every decision logged and every run registered for comparison.
 | `docs/TECHNIQUES.md` | Research-paper catalog with priorities & MPS feasibility |
 | `docs/DECISIONS.md` | Append-only decision log (the "why" trail) |
 | `docs/EXPERIMENTS.md` | Run/ablation protocol + registry schema |
+| `docs/CLOUD.md` | Rented-GPU playbook (RunPod/RTX 5090) + Mac↔Linux portability rules |
 | `docs/phases/phaseN_*.md` | Self-contained spec for each phase (one spec ≈ one AI chat) |
 | `src/llmlab/` | The python package: model, data, tokenizer, train, eval |
 | `scripts/` | CLI entry points (train, evaluate, tokenize, bench, chat…) |

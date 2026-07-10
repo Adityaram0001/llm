@@ -36,10 +36,17 @@ has fine-tuned LLMs) but is learning LLM internals hands-on. Therefore:
 
 ## Hardware & memory rules (16GB RAM — this is tight)
 
+- **Two targets, one codebase**: primary = this Mac (MPS); burst = rented Linux/NVIDIA pods
+  (RTX 5090) for M/L-tier runs — playbook in `docs/CLOUD.md` (D-010). ALL code must be
+  device-agnostic: device only via `llmlab.utils.get_device()` (cuda > mps > cpu), mixed
+  precision only via `llmlab.utils.autocast_ctx(device)`, `torch.mps.*`/`torch.cuda.*` calls
+  guarded by `is_available()`, checkpoints loaded with `map_location=get_device()`,
+  DataLoader `num_workers`/`pin_memory` as config keys (0/False on Mac). Read CLOUD.md's
+  portability rules before writing any training code.
 - Training/long jobs = **Python scripts run from terminal** (user closes other apps).
   Exploration/visualization/teaching = **Jupyter notebooks**. Never train seriously in a notebook.
-- Device: `mps`. Always include a `cpu` fallback path. Use `torch.autocast(device_type="mps", dtype=torch.bfloat16)`
-  for mixed precision; keep optimizer states fp32. Set `PYTORCH_ENABLE_MPS_FALLBACK=1` in scripts.
+- Local device: `mps`, bf16 autocast via `autocast_ctx`; keep optimizer states fp32.
+  Set `PYTORCH_ENABLE_MPS_FALLBACK=1` in scripts (harmless on Linux).
 - Never load the full corpus into Python lists. Tokenized data lives in `data/tokenized/` as
   `uint16` numpy memmap files; the DataLoader reads slices.
 - Default training shapes unless a spec says otherwise: seq_len 512, micro-batch that keeps
