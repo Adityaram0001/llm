@@ -76,20 +76,42 @@ def main() -> None:
                 }
             )
 
-    supplement_cfg = config.get("supplement", {}).get("tinystories", {})
-    if not args.skip_supplement and supplement_cfg.get("enabled"):
+    tinystories_cfg = config.get("supplement", {}).get("tinystories", {})
+    if not args.skip_supplement and tinystories_cfg.get("enabled"):
         print("\n=== Supplement (TinyStories) ===")
         supp_info = acquire.build_tinystories_supplement(CLEAN_DIR, force=args.force)
         manifest_entries.append(
             {
                 "type": "supplement",
                 "name": "tinystories",
-                "source": supplement_cfg["hf_dataset"],
+                "source": tinystories_cfg["hf_dataset"],
                 "license": "MIT (roneneldan/TinyStories)",
                 "path": str(supp_info["path"].relative_to(CLEAN_DIR)),
                 "n_stories": supp_info.get("n_stories"),
                 "chars": supp_info.get("chars"),
                 "words": supp_info.get("words"),
+            }
+        )
+
+    fineweb_cfg = config.get("supplement", {}).get("fineweb_edu", {})
+    if not args.skip_supplement and fineweb_cfg.get("enabled"):
+        print("\n=== Supplement (FineWeb-Edu) ===")
+        fw_info = acquire.build_fineweb_edu_supplement(
+            CLEAN_DIR,
+            target_bytes=fineweb_cfg["target_bytes"],
+            hf_config=fineweb_cfg.get("hf_config", "sample-10BT"),
+            force=args.force,
+        )
+        manifest_entries.append(
+            {
+                "type": "supplement",
+                "name": "fineweb_edu",
+                "source": fineweb_cfg["hf_dataset"],
+                "license": "ODC-BY (HuggingFaceFW/fineweb-edu)",
+                "path": str(fw_info["path"].relative_to(CLEAN_DIR)),
+                "n_docs": fw_info.get("n_docs"),
+                "chars": fw_info.get("chars"),
+                "words": fw_info.get("words"),
             }
         )
 

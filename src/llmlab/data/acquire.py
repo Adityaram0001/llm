@@ -302,7 +302,7 @@ def build_tinystories_supplement(clean_dir: Path, force: bool = False) -> dict[s
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "tinystories.txt"
     if out_path.exists() and not force:
-        return {"path": out_path, **text_stats(out_path.read_text(encoding="utf-8")[:0] or "")}
+        return {"path": out_path, **text_stats(out_path.read_text(encoding="utf-8"))}
 
     ds = load_dataset("roneneldan/TinyStories", split="train")
     n_chars = 0
@@ -313,9 +313,58 @@ def build_tinystories_supplement(clean_dir: Path, force: bool = False) -> dict[s
             story = row["text"].strip()
             if not story:
                 continue
+            # Most rows contain internal blank-line paragraph breaks (the raw HF
+            # text uses "\n\n" as a prose paragraph separator, not just between
+            # stories) — collapse those to a single newline so "\n\n" is left
+            # meaning ONLY "story boundary" for any downstream blank-line-delimited
+            # reader (e.g. a streaming tokenizer). Otherwise story and paragraph
+            # boundaries are indistinguishable in the flat file.
+            story = re.sub(r"\n\s*\n+", "\n", story)
             f.write(story + "\n\n")
             n_chars += len(story)
             n_words += len(story.split())
             n_stories += 1
 
     return {"path": out_path, "chars": n_chars, "words": n_words, "n_stories": n_stories}
+
+
+def build_fineweb_edu_supplement(
+    clean_dir: Path, target_bytes: int, hf_config: str = "sample-10BT", force: bool = False
+) -> dict[str, Any]:
+    """Stream a bounded sample of `HuggingFaceFW/fineweb-edu` to a flat text file.
+
+    Uses `streaming=True` so only the shards needed to reach `target_bytes` of raw text are
+    ever fetched — the `sample-10BT` config (not the full multi-terabyte dataset) keeps that
+    bounded further. Each row may itself contain internal blank-line paragraph breaks (it's
+    web/edu prose, same shape as the TinyStories rows that caused D-019's bug), so those are
+    collapsed to single newlines before writing — keeps `"\n\n"` meaning ONLY "document
+    boundary" in the output file, same fix as `build_tinystories_supplement`.
+    """
+    from datasets import load_dataset
+
+    out_dir = clean_dir / "supplement"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "fineweb_edu.txt"
+    if out_path.exists() and not force:
+        return {"path": out_path, **text_stats(out_path.read_text(encoding="utf-8"))}
+
+    ds = load_dataset("HuggingFaceFW/fineweb-edu", name=hf_config, split="train", streaming=True)
+    n_chars = 0
+    n_words = 0
+    n_docs = 0
+    written_bytes = 0
+    with out_path.open("w", encoding="utf-8") as f:
+        for row in tqdm(ds, desc="fineweb-edu", unit="doc"):
+            if written_bytes >= target_bytes:
+                break
+            text = row["text"].strip()
+            if not text:
+                continue
+            text = re.sub(r"\n\s*\n+", "\n", text)
+            f.write(text + "\n\n")
+            written_bytes += len(text.encode("utf-8")) + 2
+            n_chars += len(text)
+            n_words += len(text.split())
+            n_docs += 1
+
+    return {"path": out_path, "chars": n_chars, "words": n_words, "n_docs": n_docs}

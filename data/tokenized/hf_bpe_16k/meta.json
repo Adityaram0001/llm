@@ -131,5 +131,19 @@
       ],
       "path": "data/tokenized/hf_bpe_16k/val.bin"
     }
+  },
+  "supplements": {
+    "tinystories": {
+      "n_tokens": 520469119,
+      "n_docs": 2119489,
+      "path": "data/tokenized/hf_bpe_16k/supplement_tinystories.bin",
+      "doc_starts_path": "data/tokenized/hf_bpe_16k/supplement_tinystories_docstarts.npy"
+    },
+    "fineweb": {
+      "n_tokens": 992803683,
+      "n_docs": 808365,
+      "path": "data/tokenized/hf_bpe_16k/supplement_fineweb.bin",
+      "doc_starts_path": "data/tokenized/hf_bpe_16k/supplement_fineweb_docstarts.npy"
+    }
   }
 }

@@ -686,3 +686,11 @@ supplement:
     hf_dataset: roneneldan/TinyStories
     notes: Downloaded via HF datasets; stored separately in data/clean/supplement/, not mixed into books:dictionary
       ratio by default.
+  fineweb_edu:
+    enabled: true
+    hf_dataset: HuggingFaceFW/fineweb-edu
+    hf_config: sample-10BT
+    target_bytes: 3865470566  # ~3.6GiB raw text, user-chosen ~1B-token sample (D-015/RW-1, 2026-07-11)
+    notes: Streamed (HF datasets streaming=True, stops once target_bytes written; sample-10BT
+      config avoids touching the full multi-terabyte dataset). General web/edu text to add
+      L-tier data-budget margin + topic diversity beyond philosophy+children's-stories.

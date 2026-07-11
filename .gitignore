@@ -9,6 +9,7 @@ wandb/
 data/raw/
 data/clean/supplement/
 data/tokenized/**/*.bin
+data/tokenized/**/*.npy
 checkpoints/
 experiments/**/ckpt/
 tools/data_factory/inbox/

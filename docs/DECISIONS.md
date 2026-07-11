@@ -395,4 +395,73 @@ phase 0's MPS throughput-cliff finding showed measuring beats assuming on every 
 SFT batching (phase 8) wants token-count-based bucketing — that's a different, legitimate
 kind of dynamic batching.
 
-<!-- Append new decisions below. Next ID: D-019 -->
+## D-019 — Bug fix: TinyStories supplement had ambiguous story boundaries; fixed and retokenized  (2026-07-11, phase 4)
+**Decision:** Fixed `acquire.build_tinystories_supplement` (phase 1) and regenerated
+`data/clean/supplement/tinystories.txt` + `data/tokenized/hf_bpe_16k/supplement_tinystories.bin`.
+
+**Bug caught while building RW-1's streaming tokenizer:** the phase-1 writer joined stories with
+`story + "\n\n"`, treating a blank line as "end of story." But 94% of TinyStories rows contain
+their own internal blank-line paragraph breaks (measured on a 2,000-row sample: 1,881/2,000),
+making inter-story and intra-story blank lines indistinguishable in the flat file. A first
+streaming-tokenizer pass that split on every blank line produced 11,254,913 "documents" against
+the ~2.12M real stories logged in D-013/`manifest.json` — a >5x inflation — and, worse, inserted
+spurious `<|endoftext|>` tokens mid-story, teaching a false "story ends here" signal throughout
+the supplement. Caught by cross-checking the tokenizer's `n_docs` output against D-013's known
+story count rather than trusting the first run. A second, unrelated latent bug in the same
+function was also fixed in passing: `build_tinystories_supplement(force=False)` on an existing
+file returned zero-valued stats (`text.read_text()[:0]`) instead of real ones — harmless so far
+since the original manifest entry was written on a force=True run, but would have silently
+zeroed the manifest on any future non-force re-run.
+
+**Fix:** `acquire.py` now collapses internal blank-line breaks to single newlines
+(`re.sub(r"\n\s*\n+", "\n", story)`) before writing, so `"\n\n"` means *only* "story boundary"
+in the output file — the format any blank-line-delimited streaming reader depends on. Also fixed
+the stats-on-skip bug to read the real file. Regenerated from the HF-cached dataset (no
+re-download, ~20s) via `scripts/build_corpus.py --skip-books --skip-dictionary --force`:
+`n_stories` unchanged (2,119,489, matches D-013), `chars` dropped slightly (1,899,973,203 →
+1,890,823,551 — the collapsed whitespace), `words` unchanged. Retokenized:
+`data/tokenized/hf_bpe_16k/supplement_tinystories.bin` now has 2,119,489 docs / 520,469,119
+tokens (up from the discarded first pass's 518,765,711 tokens under the wrong 11.25M-doc split —
+extra `<|endoftext|>` tokens previously ate into the story text's token budget). Verified: decoded
+doc 0 now spans the Lily/needle story's full 3 paragraphs ending in one real EOT, not truncated
+at the first internal blank line.
+**Impacts:** none outside phase 4/RW-1 — no training has consumed the old (wrong) supplement bin
+yet.
+**Revisit if:** a future supplement source (e.g. FineWeb-Edu) uses a similar flat blank-line-
+delimited format — apply the same "confirm document boundaries independently, don't trust a
+delimiter that could also occur inside a document" lesson before writing its streaming tokenizer.
+
+## D-020 — FineWeb-Edu sample: ~1B tokens (sample-10BT config, 3.6GB text), RW-1 tokenization complete  (2026-07-11, phase 4)
+**Decision:** Downloaded and tokenized RW-1's FineWeb-Edu top-up. `acquire.build_fineweb_edu_supplement`
+streams `HuggingFaceFW/fineweb-edu` (`sample-10BT` config, `streaming=True` so only the shards
+needed are fetched) into `data/clean/supplement/fineweb_edu.txt`, stopping at a
+`target_bytes` cap (`configs/corpus.yaml` `supplement.fineweb_edu.target_bytes`). Applies the
+same D-019 fix proactively: each row's internal blank-line paragraph breaks are collapsed to
+single newlines before writing, so `"\n\n"` means only "document boundary." Tokenized via
+`scripts/tokenize_corpus.py --supplement fineweb` (same streaming batch-encode pattern as
+TinyStories) into `data/tokenized/hf_bpe_16k/supplement_fineweb.bin`.
+
+**Sizing:** User chose the ~1B-token option (target_bytes ≈ 3.6GiB) over ~300M/~500M-token
+alternatives — actual yield: 3,844,116,015 chars / 808,365 docs / **992,803,683 tokens**
+(close to the 1B target; fertility ~1.5 tok/word on this domain, consistent with D-014's
+tokenizer study numbers). Combined fresh-token pool is now 17.67M (books+dict) + 520.5M
+(tinystories) + 992.8M (fineweb) ≈ **1.53B tokens**; at Muennighoff's ~4-epoch repetition
+ceiling that's ~6.1B tokens available against the L-tier's ~2.1B need (D-015) — comfortable
+~2.9x margin, well past the "zero margin" state D-015 flagged before this data landed.
+**Options considered:** ~300M tokens (fresh pool ~838M, 4-epoch ceiling ~3.35B — still clears
+2.1B but thinner margin) / ~500M tokens (recommended default, ~1.06B fresh pool, ~4.2B
+ceiling, 2x margin) / ~1B tokens (chosen — largest download of the three, but margin isn't
+purely wasted: more raw diversity means fewer repeats are needed to hit any given token count,
+which per Muennighoff is where repetition really starts hurting).
+**Why:** User's call after reviewing the three sizes' tradeoffs (download/disk cost vs.
+margin/diversity) via the phase-4 FineWeb-Edu decision point RW-1 always required.
+**Impacts:** RW-1's tokenization work is now done (both supplements tokenized, verified via
+decoded doc-boundary spot checks — no mid-document EOT tokens in either shard). RW-1's last
+step, pushing these bins to the R2 bucket via `scripts/cloud/data_push.sh`, is still blocked on
+RW-3 (cloud accounts: rclone isn't installed, no `r2` remote configured yet) — not attempted
+this session, since the user explicitly deferred RW-3 to prioritize this data-prep thread.
+**Revisit if:** the phase-4 loader's actual per-source mixing weights (RW-4's domain-mix
+design, or plain fluency-focused defaults) show FineWeb-Edu's share needs to be much larger or
+smaller than what a straightforward "add margin" read of this entry assumed.
+
+<!-- Append new decisions below. Next ID: D-021 -->

@@ -1792,16 +1792,6 @@
     "paragraphs_deduped": 0
   },
   {
-    "type": "supplement",
-    "name": "tinystories",
-    "source": "roneneldan/TinyStories",
-    "license": "MIT (roneneldan/TinyStories)",
-    "path": "supplement/tinystories.txt",
-    "n_stories": 2119489,
-    "chars": 1899973203,
-    "words": 371713604
-  },
-  {
     "type": "dictionary",
     "split": "train",
     "source_url": "https://ftp.gnu.org/gnu/gcide/gcide-0.53.tar.xz",
@@ -1820,5 +1810,25 @@
     "n_entries": 3281,
     "chars": 320735,
     "words": 51384
+  },
+  {
+    "type": "supplement",
+    "name": "tinystories",
+    "source": "roneneldan/TinyStories",
+    "license": "MIT (roneneldan/TinyStories)",
+    "path": "supplement/tinystories.txt",
+    "n_stories": 2119489,
+    "chars": 1890823551,
+    "words": 371713604
+  },
+  {
+    "type": "supplement",
+    "name": "fineweb_edu",
+    "source": "HuggingFaceFW/fineweb-edu",
+    "license": "ODC-BY (HuggingFaceFW/fineweb-edu)",
+    "path": "supplement/fineweb_edu.txt",
+    "n_docs": 808365,
+    "chars": 3844116015,
+    "words": 625124333
   }
 ]

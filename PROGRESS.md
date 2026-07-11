@@ -4,31 +4,38 @@
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
 **Active phase:** Phase 4 — `docs/phases/phase4_training.md`
-**Last session:** 2026-07-11 — Phase 3 completed: config-driven GPT in `src/llmlab/model/`
-(`config.py`, `norms.py`, `positional.py`, `attention.py`, `ffn.py`, `block.py`, `gpt.py`).
-Baseline path fully implemented (MHA/GQA/MQA via `F.scaled_dot_product_attention`, learned/
-sinusoidal/rope/alibi/none positions, layernorm/rmsnorm, gelu/swiglu FFN, weight tying,
-gpt2/scaled init); `attention="mla"`/`moe`/`mtp` are config fields that raise
-`NotImplementedError` pointing to phase 5. Tier sizes finalized vocab-aware (**D-015**): S
-9.71M / M 34.62M / L 104.80M (deep-narrow aspect, 24 layers × 576 for L), configs in
-`configs/model_{s,m,l}.yaml`. Baseline hyperparameter defaults logged (**D-016**): tying ON,
-head_dim=64 fixed, dropout=0.0, GPT-2 init. **Bug caught while building configs:** the phase-3
-spec said vocab=16,384 (misreading "16k" as 2^14) — actual trained tokenizer is 16,000
-(corrected in the spec, D-015, and the phase-3 parameter-allocation learning note).
-`tests/test_model.py`: 51 tests green on both `mps` and `cpu` (shapes, causal-mask-doesn't-leak-
-future-into-past for every pos_encoding, loss≈ln(vocab) at init, generate w/ top-k/top-p, every
-config axis instantiates, tied-weights share storage, RoPE relative-shift property, deferred
-techniques raise NotImplementedError). `notebooks/04_shapes_walkthrough.ipynb`: tensor-by-tensor
-forward pass, param-budget pie charts across tiers, causal-mask visualization, untrained-model
-attention heatmap, overfit-one-batch (loss 9.72→0.038 in 200 steps) — executes cleanly end to
-end. Overfit-one-batch run was NOT registered in `experiments/registry.csv` (a debug sanity
-check, not a comparable ablation — no baseline/hypothesis/val-loss); flagging this call in case
-a future session disagrees.
-**Open blockers:** none. RW-1 (tokenize supplement) now includes a FineWeb-Edu sample per
-D-015 — needs its own >2GB download go-ahead when phase 4 gets there. The D-008 flag (hero run
-≈ 1.5–3 weeks on the Mac) remains resolved in principle by **D-010**: rented RTX 5090 as burst
-compute for M/L-tier runs (playbook `docs/CLOUD.md`, scripts in `scripts/cloud/`). Final
-go/no-go + provider choice happens when the first big run is actually needed.
+**Last session:** 2026-07-11 — Phase 4 started with RW-1 (data prep), per user's choice to do
+data prep before the training engine. Extended `scripts/tokenize_corpus.py` with a streaming
+`--supplement {tinystories,fineweb}` mode (batch-encode via HF `encode_batch`, append to disk
+incrementally, per-doc `doc_starts` in a sibling `.npy` rather than bloating `meta.json`).
+**Bug caught while building it (D-019):** the phase-1 TinyStories writer joined stories with
+`"\n\n"`, but 94% of rows have their own internal blank-line paragraph breaks — a first
+streaming-tokenizer pass split on every blank line and produced 11.25M "documents" against the
+real ~2.12M stories, inserting spurious mid-story `<|endoftext|>` tokens. Caught by
+cross-checking `n_docs` against D-013's known story count. Fixed `acquire.py` to collapse
+internal blank lines before writing (so `"\n\n"` means only "document boundary"), regenerated
+`tinystories.txt` from the HF-cached dataset (no re-download) and retokenized — verified doc 0
+now spans its full 3 paragraphs ending in one real EOT. Then built
+`acquire.build_fineweb_edu_supplement` (same D-019 fix applied proactively) and, with the
+user's go-ahead + sizing choice (D-020: ~1B tokens / sample-10BT config / 3.6GB text over
+~300M/~500M alternatives), streamed+tokenized a FineWeb-Edu sample: 992.8M tokens / 808,365
+docs, doc-boundary spot-checks clean. **RW-1's tokenization work is done**: both supplements
+live at `data/tokenized/hf_bpe_16k/supplement_{tinystories,fineweb}.bin` +
+`supplement_{tinystories,fineweb}_docstarts.npy`. Combined fresh-token pool is now ~1.53B
+(17.67M books+dict + 520.5M tinystories + 992.8M fineweb) — at Muennighoff's ~4-epoch ceiling
+that's ~6.1B tokens against the L-tier's ~2.1B need (D-015), a comfortable ~2.9x margin (up
+from the "zero margin" state D-015 flagged). RW-1's last step — pushing these bins to the R2
+bucket via `scripts/cloud/data_push.sh` — is **not done**: rclone isn't installed and no `r2`
+remote is configured (that's RW-3, which the user explicitly deferred this session to
+prioritize data prep). Training-engine deliverables (loader.py, trainer.py, scripts/train.py,
+find_batch_size.py, first S-tier experiments) are **not started yet** — next session's job.
+**Open blockers:** none for continuing phase 4 locally (S-tier training only needs the
+already-tokenized books+dictionary `train.bin`/`val.bin`, untouched by this session). RW-3
+(cloud accounts) should happen before the first M/L-tier run, not before S-tier engine work.
+The D-008 flag (hero run ≈ 1.5–3 weeks on the Mac) remains resolved in principle by **D-010**:
+rented RTX 5090 as burst compute for M/L-tier runs (playbook `docs/CLOUD.md`, scripts in
+`scripts/cloud/`). Final go/no-go + provider choice happens when the first big run is actually
+needed.
 
 ## Phase status
 
@@ -38,7 +45,7 @@ go/no-go + provider choice happens when the first big run is actually needed.
 | 1 | Corpus: books + dictionary | `docs/phases/phase1_data.md` | done |
 | 2 | Tokenizers (scratch + HF) | `docs/phases/phase2_tokenizer.md` | done |
 | 3 | Model architecture | `docs/phases/phase3_architecture.md` | done |
-| 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | todo |
+| 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | in-progress |
 | 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | todo |
 | 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | todo |
 | 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | todo |
@@ -110,11 +117,26 @@ go/no-go + provider choice happens when the first big run is actually needed.
 - [x] `notebooks/04_shapes_walkthrough.ipynb`: executes cleanly end to end
 - [x] PROGRESS.md + DECISIONS.md updated (D-015, D-016); phase marked done
 
+## Phase 4 checklist (in-progress)
+
+- [x] 0a. Data prep (RW-1): TinyStories + FineWeb-Edu tokenized to
+  `data/tokenized/hf_bpe_16k/supplement_{tinystories,fineweb}.bin` (+ docstarts `.npy`); D-019
+  bug fix (ambiguous story boundaries) + D-020 (FineWeb-Edu sizing) logged. R2 push (bucket
+  step) deferred — blocked on RW-3, not required for S-tier work.
+- [ ] 0b. Portability smoke test (`--device cpu` canary) — not yet exercised (no training code
+  written yet)
+- [ ] 1. `src/llmlab/data/loader.py` (memmap sampler + per-source mixing weights)
+- [ ] 2. `src/llmlab/train/trainer.py`
+- [ ] 3. `scripts/train.py`
+- [ ] 3b. `scripts/find_batch_size.py` (D-018)
+- [ ] 4. First experiments: `p4_smoke`, `p4_s_baseline`, `p4_s_lr_sweep`, resume test
+- [ ] 5. `notebooks/05_compare_runs.ipynb`
+
 ## Rework queue (see CLAUDE.md "Change management")
 
 | ID | What | Why | Fix in phase | Status |
 |----|------|-----|--------------|--------|
-| RW-1 | Tokenize TinyStories supplement + a FineWeb-Edu sample (size/mixing ratio TBD) with hf_bpe_16k → `data/tokenized/hf_bpe_16k/supplement_*.bin`; extend `scripts/tokenize_corpus.py`. FineWeb-Edu download (>2GB expected) needs its own go-ahead per CLAUDE.md before pulling. **Per D-017: run entirely on the Mac (CPU-only, streaming/chunked — never hold corpus in RAM, append to memmap incrementally), then `scripts/cloud/data_push.sh` to the R2 bucket as the final step** | D-015: L-tier is 105M, needs ~2.1B tokens; repetition alone (~4 epochs of core+TinyStories) is right at the edge, so a FineWeb-Edu sample was chosen to add margin + topic diversity | 4 (before first M-tier run) | todo |
+| RW-1 | Tokenize TinyStories supplement + a FineWeb-Edu sample with hf_bpe_16k → `data/tokenized/hf_bpe_16k/supplement_*.bin`. **Done 2026-07-11** (D-019, D-020): both supplements tokenized and verified (520.5M + 992.8M tokens). Only the final step — `scripts/cloud/data_push.sh` to the R2 bucket — remains, blocked on RW-3 (rclone/remote not set up) | D-015: L-tier is 105M, needs ~2.1B tokens; repetition alone (~4 epochs of core+TinyStories) was right at the edge, so a FineWeb-Edu sample was added for margin + topic diversity | 4 (R2 push before first M-tier run) | in-progress |
 | RW-3 | One-time cloud accounts setup with the user: push repo to GitHub (private is fine), Docker Hub account, build+push `docker/Dockerfile` (buildx, linux/amd64), Cloudflare R2 bucket `llmlab` + rclone remote on Mac, provider pod template with env vars | D-017: Docker fast-start + bucket data logistics chosen for billed-time efficiency | 4 (any time before first cloud run; ~30 min, all free tiers) | todo |
 | RW-4 | Domain corpus expansion (finance/self-help/wisdom): user picks PD-only books (Gutenberg-era finance/self-help classics — modern bestsellers are copyrighted), optionally + finance-filtered FineWeb-Edu slice; loader gets per-source mixing weights so domain share of the TRAINING STREAM (not disk) is explicit; keep domain repetition ≤~4 epochs. User's target: 10–20% (recommendation 15–25%); final % is the user's call when phase 4 builds the loader. Also: finance/wisdom probes in phase 6, domain-mix ablation in P5-G (specs updated) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 4 (loader + corpus) / 6 (probes) / 5-G (ablation) | todo |
 
@@ -135,16 +157,24 @@ environment + data + tokenizer setup).
 
 ## Notes for next session
 
-- Start with Phase 4. Read `docs/phases/phase4_training.md`. First real thing it needs is RW-1:
-  tokenize the TinyStories supplement + decide/pull a FineWeb-Edu sample (D-015 chose this to
-  close the ~2.1B-token gap for the L-tier hero run; sample size/mixing ratio wasn't decided,
-  and the FineWeb-Edu download is >2GB so needs its own go-ahead per CLAUDE.md before pulling).
-  Per D-017 tokenization is Mac-local CPU work (stream, chunk, memmap-append; ~under an hour);
-  finish by pushing bins to the R2 bucket via `scripts/cloud/data_push.sh` (once RW-3 exists).
+- RW-1's data prep is done (D-019, D-020) — start the actual **training engine** deliverables
+  next: `src/llmlab/data/loader.py` (memmap random-offset (x,y) sampler, deterministic given
+  seed+step, per-source mixing weights so a loader can combine books/dict/tinystories/fineweb
+  by config-driven ratio — note RW-4 wants this same mixing-weight mechanism for domain data,
+  so design it general-purpose from the start), then `src/llmlab/train/trainer.py`,
+  `scripts/train.py`, `scripts/find_batch_size.py`, then the S-tier `p4_smoke`/`p4_s_baseline`/
+  `p4_s_lr_sweep` experiments (all S-tier — only need the already-tokenized books+dictionary
+  `train.bin`/`val.bin`, not the new supplements). See `docs/phases/phase4_training.md`
+  deliverables 0b–5 for the full spec (0a/RW-1 is the only deliverable now complete).
 - RW-3 (one-time cloud accounts: GitHub remote, Docker Hub + image build, R2 bucket + rclone,
-  pod template) is user-facing setup — walk it interactively when convenient, ideally before
-  the first M-tier run. Cloud flow after that: `docs/CLOUD.md` "Docker fast-start" (billed
-  cold start ≈ 2–4 min; big files move only via bucket, never rsync).
+  pod template) is user-facing setup — still not started (rclone isn't installed). Not a
+  blocker for S-tier engine work; walk it interactively before the first M-tier run, and as
+  RW-1's last remaining step (`scripts/cloud/data_push.sh` push of the now-tokenized
+  supplement bins). Cloud flow after that: `docs/CLOUD.md` "Docker fast-start" (billed cold
+  start ≈ 2–4 min; big files move only via bucket, never rsync).
+- RW-4 (domain corpus expansion — finance/self-help/wisdom books) still needs the user to pick
+  PD-only titles; not blocking the training-engine build, but the loader's mixing-weight design
+  (previous bullet) should keep RW-4 in mind so it's not a rewrite later.
 - Model is ready (phase 3, D-015/D-016): `src/llmlab/model/` (`GPT`, `ModelConfig`), configs at
   `configs/model_{s,m,l}.yaml` (S 9.71M / M 34.62M / L 104.80M, deep-narrow L-tier, vocab=16000,
   head_dim=64 fixed, tied embeddings, rmsnorm/pre-norm/rope/swiglu/gpt2-init defaults, dropout
@@ -163,18 +193,21 @@ environment + data + tokenizer setup).
   vocab for phase 8 — check `data/tokenized/tokenizers/hf_bpe_16k/vocab.json` if their exact
   IDs are needed.
 - Corpus is ready at `data/clean/`: `books/*.txt` (110 train + 2 val in `val/books/`),
-  `dictionary_prose.txt` + `dictionary.jsonl` (+ val versions), `supplement/tinystories.txt`.
+  `dictionary_prose.txt` + `dictionary.jsonl` (+ val versions), `supplement/tinystories.txt`
+  (regenerated 2026-07-11 per D-019's bug fix) + `supplement/fineweb_edu.txt` (new, D-020).
   `data/clean/manifest.json` has per-file stats/sha256/license. Re-run
   `python scripts/build_corpus.py` any time to rebuild from scratch (idempotent, cached in
   `data/raw/`); add `--force` to re-download, or `--skip-books`/`--skip-dictionary`/
   `--skip-supplement` to build a subset — partial runs merge into the existing
   `data/clean/manifest.json` rather than overwriting it.
 - Token budget: 17,665,275 train + 179,655 val tokens tokenized at 16k vocab (books+dictionary,
-  the S-tier ablation corpus per D-006) + a much larger TinyStories supplement (~475-533M
-  tokens estimated, NOT yet tokenized — stored as raw text only, not mixed into the default
-  training stream — see `configs/corpus.yaml` `supplement.tinystories`) for M/L-tier runs.
-  If a later phase mixes in the supplement, it will need its own tokenize_corpus.py run (the
-  script currently only tokenizes books+dictionary by design, see phase 2 notes in D-014).
+  the S-tier ablation corpus per D-006) + TinyStories (520,469,119 tokens, 2,119,489 docs) +
+  FineWeb-Edu (992,803,683 tokens, 808,365 docs) — both supplements now tokenized (D-019/D-020)
+  at `data/tokenized/hf_bpe_16k/supplement_{tinystories,fineweb}.bin` with matching
+  `supplement_*_docstarts.npy` doc-boundary files. Combined fresh pool ≈1.53B tokens; ~4-epoch
+  Muennighoff ceiling ≈6.1B against the L-tier's ~2.1B need (D-015) — ~2.9x margin. The
+  phase-4 loader (not yet built) needs per-source mixing weights to combine these four files
+  by config-driven ratio into one training stream (also serves RW-4's domain-mix need later).
 - Environment is ready: `source .venv/bin/activate`, `llmlab` importable, jupyter kernel `llm-lab`
   registered. `src/llmlab/utils.py` has `set_seed`, `get_device`, `param_count`, `mem_stats` —
   reuse these rather than re-deriving them in phase 3+ scripts.
