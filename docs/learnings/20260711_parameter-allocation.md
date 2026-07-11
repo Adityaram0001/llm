@@ -66,8 +66,14 @@ Chinchilla (Hoffmann '22): compute-optimal ≈ **20 tokens per parameter**.
 sets corpus and wall-clock. Change any link and the chain re-propagates — that's what the
 rework queue is for.
 
+**Correction (phase 3, D-015):** this note's illustrative math used vocab=16,384 (reading "16k"
+as 2^14). The tokenizer actually trained in phase 2 uses the literal 16,000 — see D-015's
+correction note. The percentages/conclusions above are unchanged (16,384 vs 16,000 is a <2.5%
+difference), but the exact embed-size figures (6.3M, etc.) are ~2% high; phase 3's configs and
+D-015/D-016 use the correct 16,000.
+
 ## Related
-D-001 (tiers, superseded-in-part by phase-3 outcome) · D-014 (16k vocab) · D-006/D-013 (corpus,
-supplement) · D-008/D-010 (compute budget) · Papers: Kaplan '20, Chinchilla '22, Press & Wolf
-'16 (tying), Muennighoff '23 (data-constrained scaling), MobileLLM '24 (depth-vs-width at
-small scale).
+D-001 (tiers, superseded-in-part by phase-3 outcome) · D-014 (16k vocab) · D-015 (tier sizes
+finalized, vocab-number correction) · D-006/D-013 (corpus, supplement) · D-008/D-010 (compute
+budget) · Papers: Kaplan '20, Chinchilla '22, Press & Wolf '16 (tying), Muennighoff '23
+(data-constrained scaling), MobileLLM '24 (depth-vs-width at small scale).

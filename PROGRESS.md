@@ -3,25 +3,32 @@
 > Every Claude session reads this first and updates it last. Keep it honest and terse.
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
-**Active phase:** Phase 3 — `docs/phases/phase3_architecture.md`
-**Last session:** 2026-07-10 — Phase 2 completed: Part A from-scratch byte-level BPE
-(`src/llmlab/tokenizer/bpe_scratch.py`, `notebooks/02_bpe_from_scratch.ipynb`, trained on one
-book). Part B HF byte-level BPE tokenizers at 8k/16k/32k trained on the full S-tier corpus
-(`src/llmlab/tokenizer/train_hf.py`, saved to `data/tokenized/tokenizers/hf_bpe_{8k,16k,32k}/`).
-Part C comparison (`notebooks/03_tokenizer_compare.ipynb`) measured fertility, compression,
-vocab utilization, rare-word splitting, and embedding-table cost for 8k/16k/32k + GPT-2's
-50k + the scratch tokenizer; **chose HF BPE 16k vocab** (D-014) — captures most of 32k's
-fertility/rare-word gains at half the embedding-table cost, and avoids 32k's utilization
-problem (only 49.3% of its vocab fires on our own held-out text). Part D tokenized the full
-corpus with the chosen tokenizer via `scripts/tokenize_corpus.py`:
-`data/tokenized/hf_bpe_16k/{train,val}.bin` (uint16 memmap) — 17,665,275 train tokens / 111
-docs, 179,655 val tokens / 3 docs. Registered as 5 comparison rows in
-`experiments/registry.csv` (p2, no real training involved — tier/params/tokens/loss columns
-are "-").
-**Open blockers:** none. The D-008 flag (hero run ≈ 1.5–3 weeks on the Mac) is resolved in
-principle by **D-010**: rented RTX 5090 as burst compute for M/L-tier runs (playbook
-`docs/CLOUD.md`, scripts in `scripts/cloud/`). Final go/no-go + provider choice happens when
-the first big run is actually needed (phase 4 M-tier or phase 9).
+**Active phase:** Phase 4 — `docs/phases/phase4_training.md`
+**Last session:** 2026-07-11 — Phase 3 completed: config-driven GPT in `src/llmlab/model/`
+(`config.py`, `norms.py`, `positional.py`, `attention.py`, `ffn.py`, `block.py`, `gpt.py`).
+Baseline path fully implemented (MHA/GQA/MQA via `F.scaled_dot_product_attention`, learned/
+sinusoidal/rope/alibi/none positions, layernorm/rmsnorm, gelu/swiglu FFN, weight tying,
+gpt2/scaled init); `attention="mla"`/`moe`/`mtp` are config fields that raise
+`NotImplementedError` pointing to phase 5. Tier sizes finalized vocab-aware (**D-015**): S
+9.71M / M 34.62M / L 104.80M (deep-narrow aspect, 24 layers × 576 for L), configs in
+`configs/model_{s,m,l}.yaml`. Baseline hyperparameter defaults logged (**D-016**): tying ON,
+head_dim=64 fixed, dropout=0.0, GPT-2 init. **Bug caught while building configs:** the phase-3
+spec said vocab=16,384 (misreading "16k" as 2^14) — actual trained tokenizer is 16,000
+(corrected in the spec, D-015, and the phase-3 parameter-allocation learning note).
+`tests/test_model.py`: 51 tests green on both `mps` and `cpu` (shapes, causal-mask-doesn't-leak-
+future-into-past for every pos_encoding, loss≈ln(vocab) at init, generate w/ top-k/top-p, every
+config axis instantiates, tied-weights share storage, RoPE relative-shift property, deferred
+techniques raise NotImplementedError). `notebooks/04_shapes_walkthrough.ipynb`: tensor-by-tensor
+forward pass, param-budget pie charts across tiers, causal-mask visualization, untrained-model
+attention heatmap, overfit-one-batch (loss 9.72→0.038 in 200 steps) — executes cleanly end to
+end. Overfit-one-batch run was NOT registered in `experiments/registry.csv` (a debug sanity
+check, not a comparable ablation — no baseline/hypothesis/val-loss); flagging this call in case
+a future session disagrees.
+**Open blockers:** none. RW-1 (tokenize supplement) now includes a FineWeb-Edu sample per
+D-015 — needs its own >2GB download go-ahead when phase 4 gets there. The D-008 flag (hero run
+≈ 1.5–3 weeks on the Mac) remains resolved in principle by **D-010**: rented RTX 5090 as burst
+compute for M/L-tier runs (playbook `docs/CLOUD.md`, scripts in `scripts/cloud/`). Final
+go/no-go + provider choice happens when the first big run is actually needed.
 
 ## Phase status
 
@@ -30,7 +37,7 @@ the first big run is actually needed (phase 4 M-tier or phase 9).
 | 0 | Environment & MPS baseline | `docs/phases/phase0_setup.md` | done |
 | 1 | Corpus: books + dictionary | `docs/phases/phase1_data.md` | done |
 | 2 | Tokenizers (scratch + HF) | `docs/phases/phase2_tokenizer.md` | done |
-| 3 | Model architecture | `docs/phases/phase3_architecture.md` | todo |
+| 3 | Model architecture | `docs/phases/phase3_architecture.md` | done |
 | 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | todo |
 | 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | todo |
 | 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | todo |
@@ -87,12 +94,28 @@ the first big run is actually needed (phase 4 M-tier or phase 9).
   val tokens (3 docs)
 - [x] PROGRESS.md + DECISIONS.md updated (D-014); phase marked done
 
+## Phase 3 checklist (done)
+
+- [x] `src/llmlab/model/config.py`: `ModelConfig` dataclass (+ `MLAConfig`/`MoEConfig`/
+  `MTPConfig`), `from_yaml`, validates `n_heads % n_kv_heads == 0` and MLA needs an `mla:` block
+- [x] `norms.py` (LayerNorm/RMSNorm), `positional.py` (learned/sinusoidal/RoPE/ALiBi + relative-
+  shift math), `attention.py` (MHA/GQA/MQA via SDPA, qk_norm, RoPE injection), `ffn.py`
+  (GELU/SwiGLU), `block.py` (pre/post-norm residual wiring), `gpt.py` (embeddings→blocks→
+  final norm→head; `forward`, `generate` w/ temperature+top-k+top-p, `num_params(breakdown=)`,
+  `estimate_flops_per_token`)
+- [x] `attention="mla"`, `moe`, `mtp` raise `NotImplementedError` (config fields exist, phase 5)
+- [x] Tier sizes finalized vocab-aware, deep-narrow L-tier, FineWeb-Edu data-budget plan (D-015);
+  baseline defaults tying/head_dim/dropout/init (D-016); `configs/model_{s,m,l}.yaml` committed
+- [x] `tests/test_model.py`: 51 tests green on mps AND cpu
+- [x] `notebooks/04_shapes_walkthrough.ipynb`: executes cleanly end to end
+- [x] PROGRESS.md + DECISIONS.md updated (D-015, D-016); phase marked done
+
 ## Rework queue (see CLAUDE.md "Change management")
 
 | ID | What | Why | Fix in phase | Status |
 |----|------|-----|--------------|--------|
-| RW-1 | Tokenize TinyStories supplement (+any added corpus) with hf_bpe_16k → `data/tokenized/hf_bpe_16k/supplement_*.bin`; extend `scripts/tokenize_corpus.py` | Supplement was left raw-only in phase 2 by design; needed once M/L-tier runs mix it in. Final size depends on the phase-3 tier/data-budget decision | 4 (before first M-tier run) | todo |
-| RW-2 | If phase 3 grows L-tier beyond ~105M: recompute D-008 wall-clock extrapolations + D-010 cloud cost estimate; check corpus covers ≥20 tok/param or log the deliberate shortfall | Tier sizes set pre-tokenizer (D-001) are being finalized vocab-aware in phase 3 | 3 | todo |
+| RW-1 | Tokenize TinyStories supplement + a FineWeb-Edu sample (size/mixing ratio TBD) with hf_bpe_16k → `data/tokenized/hf_bpe_16k/supplement_*.bin`; extend `scripts/tokenize_corpus.py`. FineWeb-Edu download (>2GB expected) needs its own go-ahead per CLAUDE.md before pulling | D-015: L-tier is 105M, needs ~2.1B tokens; repetition alone (~4 epochs of core+TinyStories) is right at the edge, so a FineWeb-Edu sample was chosen to add margin + topic diversity | 4 (before first M-tier run) | todo |
+| RW-2 | ~~Recompute D-008/D-010 if L-tier grows beyond ~105M~~ — resolved by D-015: L-tier stayed at ~105M (95.6M active), in-range of existing extrapolations, no recompute needed | D-015 finalized tier sizes vocab-aware | 3 | done |
 
 ## Run ledger (latest 10 — full list in experiments/registry.csv)
 
@@ -102,11 +125,21 @@ environment + data + tokenizer setup).
 
 ## Notes for next session
 
-- Start with Phase 3. Read `docs/phases/phase3_architecture.md`. Its decision points now
-  include **finalizing tier parameter counts vocab-aware** (user explicitly wants the
-  parameter-allocation reasoning surfaced — see `docs/learnings/20260711_parameter-allocation.md`)
-  and the coupled data-budget check (RW-2).
-- Tokenizer is decided (D-014): **HF BPE, 16k vocab**, files at
+- Start with Phase 4. Read `docs/phases/phase4_training.md`. First real thing it needs is RW-1:
+  tokenize the TinyStories supplement + decide/pull a FineWeb-Edu sample (D-015 chose this to
+  close the ~2.1B-token gap for the L-tier hero run; sample size/mixing ratio wasn't decided,
+  and the FineWeb-Edu download is >2GB so needs its own go-ahead per CLAUDE.md before pulling).
+- Model is ready (phase 3, D-015/D-016): `src/llmlab/model/` (`GPT`, `ModelConfig`), configs at
+  `configs/model_{s,m,l}.yaml` (S 9.71M / M 34.62M / L 104.80M, deep-narrow L-tier, vocab=16000,
+  head_dim=64 fixed, tied embeddings, rmsnorm/pre-norm/rope/swiglu/gpt2-init defaults, dropout
+  0.0). `tests/test_model.py` is the reference for how every config axis behaves — reuse the
+  `tiny_config()` pattern for training-loop unit tests rather than re-deriving fixtures.
+  `notebooks/04_shapes_walkthrough.ipynb` has the tensor-shape reference if a training bug needs
+  shape-by-shape debugging. Remember: `attention="mla"`, `moe`, `mtp` configs raise
+  `NotImplementedError` — don't reach for them before phase 5.
+- Tokenizer is decided (D-014): **HF BPE, 16,000 vocab** (corrected from an earlier "16,384"
+  typo carried in the phase-3 spec — see D-015's correction note; the real tokenizer/data always
+  used 16,000). Files at
   `data/tokenized/tokenizers/hf_bpe_16k/` (tokenizer itself) and
   `data/tokenized/hf_bpe_16k/{train,val}.bin` + `meta.json` (tokenized corpus, uint16 memmap,
   ready for a phase-4 DataLoader). `<|endoftext|>` id is in `meta.json`'s `eot_id` field

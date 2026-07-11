@@ -1,0 +1,39 @@
+# L-tier — the single hero pretrain (D-015 supersedes D-001's provisional 100-125M sizing).
+# Deep-narrow aspect (24 layers x 576) over GPT-2-style wide-shallow (e.g. 11x832 for the same
+# budget) — user's call after reviewing both families; wide-shallow kept as the P5-G ablation.
+#
+# Param breakdown (vocab=16000, tied embeddings, head_dim=64, swiglu ffn_mult=8/3):
+#   embed    9.22M  (8.8%)
+#   attn    31.85M
+#   ffn     63.70M
+#   norms    0.03M
+#   ---------------
+#   total  104.80M  (active/non-embedding: 95.58M)
+#
+# Chinchilla-optimal token budget (~20 tok/param): ~2.1B tokens. Data plan: core corpus (17.7M)
+# + TinyStories + a FineWeb-Edu sample, repeated up to ~4 epochs (Muennighoff '23) — sizing and
+# mixing ratio are a phase-4 decision (RW-1).
+
+vocab_size: 16000
+d_model: 576
+n_layers: 24
+n_heads: 9
+n_kv_heads: 9       # == n_heads -> plain MHA; set < n_heads for a GQA/MQA ablation
+head_dim: 64
+max_seq_len: 512    # matches CLAUDE.md's default training seq_len
+dropout: 0.0        # modern pretraining default (D-016); revisit only if overfitting on repeats
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667    # 8/3: keeps SwiGLU's 3-matrix param count ~= a 4x-hidden GELU MLP's 2 (D-016)
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2

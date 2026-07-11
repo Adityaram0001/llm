@@ -257,4 +257,101 @@ on our philosophy/dictionary text. User reviewed this table and chose 16k over 8
 for the illustrative embedding-cost math, or a later phase adds a very different-domain data
 source (code, modern web text) where 16k's fertility on that domain turns out poor.
 
-<!-- Append new decisions below. Next ID: D-015 -->
+## D-015 — Tier sizes finalized vocab-aware; L-tier is deep-narrow ~105M; data budget closed via FineWeb-Edu sample  (2026-07-11, phase 3)
+**Decision:** Supersedes D-001's provisional tier sizes (written pre-tokenizer). All three
+tiers fixed at `vocab=16,000` (D-014's actual trained tokenizer size — see the correction note
+below), tied embeddings, `head_dim=64` throughout:
+
+| Tier | d_model | layers | heads | embed | active | total (tied) | embed % |
+|------|---------|--------|-------|-------|--------|--------------|---------|
+| S | 192 | 15 | 3 | 3.07M | 6.64M | 9.71M | 31.6% |
+| M | 320 | 24 | 5 | 5.12M | 29.50M | 34.62M | 14.8% |
+| L | 576 | 24 | 9 | 9.22M | 95.58M | 104.80M | 8.8% |
+
+**Bug caught while writing configs:** the phase-3 spec text (and this entry's first draft) said
+"vocab is now fixed at 16,384" — treating "16k" as the power-of-two 2^14. The tokenizer
+actually trained in phase 2 (`src/llmlab/tokenizer/train_hf.py`'s `--vocab-sizes` default,
+confirmed in `data/tokenized/hf_bpe_16k/meta.json` and `tokenizers/hf_bpe_16k/vocab.json`) used
+the literal round number **16,000**. Caught by cross-checking the real tokenizer file before
+finalizing configs rather than trusting the spec's number. `docs/phases/phase3_architecture.md`
+corrected in place (factual error, not a re-litigated decision). All tables/configs below use
+the correct 16,000.
+
+L-tier aspect ratio is **deep-narrow** (24 layers × 576, MobileLLM/SmolLM2-style) over
+wide-shallow (GPT-2-style, e.g. 11×832 for the same 105M) — user's call after reviewing both
+families at 105M/125M/160M candidates (all computed with the same head_dim=64, tied-embedding
+formula). S and M kept the same depth-leaning philosophy for family consistency (one codebase,
+consistent design language across tiers) rather than switching aspect families by tier.
+
+**Data budget:** Chinchilla ~20 tok/param → L-tier needs ~2.1B tokens. Available fresh data
+(17.7M core + ~500-533M raw TinyStories, untokenized) tops out at ~517-551M raw tokens — even
+at Muennighoff's supported ~4 repeated epochs that's only ~2.1B, right at the edge with zero
+margin. User chose to **add a FineWeb-Edu sample** (general web/edu text, HF
+`HuggingFaceFW/fineweb-edu`) rather than lean entirely on repetition, to keep epoch count
+comfortably low and add topic diversity beyond philosophy+children's-stories. Concrete sample
+size/mixing ratio is a **phase-4 decision** (that's where the DataLoader and RW-1's
+tokenization work happen) — this entry only fixes the *strategy*; the actual download (>2GB
+expected) needs its own go-ahead per CLAUDE.md's data-budget rule before it happens.
+
+**Options considered:** L-tier 105M / 125M / 160M (need ~2.1B/2.5B/3.2B tokens respectively —
+125M and especially 160M pushed epoch count past the well-tested ~4x range without new data);
+wide-shallow vs deep-narrow aspect at fixed budget; data-gap-closing via (a) repetition only,
+(b) FineWeb-Edu addition — chosen, (c) deliberate undertraining at a larger size.
+**Why:** 105M keeps the data story clean (comfortable epoch count even before the FineWeb-Edu
+top-up); deep-narrow matches current small-model literature and gives the user a genuinely
+different shape than GPT-2 to learn from, with wide-shallow preserved as the P5-G ablation
+comparison at cheap S-tier cost instead of being the one-shot hero run's bet.
+**Impacts:** RW-2 (recompute time/cost — done here, folded into this entry) resolved: 105M is
+in-range of D-008/D-010 extrapolations, no timeline blowup. RW-1 updated: tokenization must now
+include a FineWeb-Edu sample, not just TinyStories, sized/mixed in phase 4.
+**Revisit if:** phase 4's actual DataLoader mixing design finds the FineWeb-Edu sample changes
+these numbers meaningfully, or eval (phase 6) shows the deep-narrow shape underperforming badly
+enough to swap to wide-shallow for a re-run.
+
+## D-016 — Baseline architecture defaults: weight tying ON, head_dim=64 fixed, dropout=0.0, GPT-2 init  (2026-07-11, phase 3)
+**Decision:** Applied the phase-3 spec's own recommendations as the baseline `configs/model_{s,m,l}.yaml`
+defaults (also `src/llmlab/model/config.py`'s dataclass defaults, so a bare `ModelConfig(...)`
+matches):
+- **`tie_embeddings: true`.** Press & Wolf '16: sharing the input embedding and output
+  unembedding matrix is a straightforward win — it's the same "which vector represents token
+  X" mapping either direction, halves the embedding budget, and per
+  `docs/learnings/20260711_parameter-allocation.md` matters MORE at our 16k vocab / small-model
+  scale than at GPT-2/GPT-3 scale (untied would cost the L-tier model an extra 9.4M params —
+  ~9% of the total budget — for zero known benefit).
+- **`head_dim: 64` fixed** (not derived as `d_model // n_heads` with a free head count). 64 is
+  the value nearly every reference model converges on (GPT-2, LLaMA, Mistral); fixing it makes
+  `n_heads` the derived quantity instead, which keeps attention FLOPs/head comparable across
+  tiers and avoids accidentally shrinking heads into an uninformative dimension as models get
+  wider at a fixed head count.
+- **`dropout: 0.0`.** Standard for modern LLM pretraining at these token budgets (GPT-3, LLaMA,
+  Chinchilla-era models all train without dropout) — dropout was designed for the small-data,
+  many-epoch regime; at internet-scale (or our repeated-epoch-but-large) token counts the model
+  doesn't see the same example enough times for dropout's regularization to be the right tool,
+  and it costs some final loss. Revisit only if the FineWeb-Edu-extended corpus still ends up
+  heavily repeated (many >4 epochs) and overfitting shows up in val loss.
+- **`init: gpt2`** (Radford et al. '19): all weights ~ N(0, 0.02), then every sub-layer's
+  *residual-writing* projection (`attn.o_proj`, `ffn`'s final down-projection) additionally
+  scaled by `1/sqrt(2*n_layers)`. The 0.02 constant is empirical (small enough that logits stay
+  near-uniform at init regardless of d_model, since it isn't fan-in-scaled — verified in
+  `tests/test_model.py::test_loss_near_ln_vocab_at_init`, loss lands within 0.01 of ln(vocab)).
+  The 1/sqrt(2n) scaling exists because each block adds two roughly-independent contributions
+  (attention out, FFN out) to the residual stream; without down-scaling them, the residual
+  stream's variance grows ~linearly with depth, which destabilizes deep transformers at
+  initialization. An alternate `init="scaled"` (uniformly applies 1/sqrt(2n) to every linear
+  layer, not just residual-writing ones) is implemented too — both are real, testable code
+  paths (`tests/test_model.py::test_init_axis_instantiates`), not just config placeholders, so
+  init scheme is available as a P5 ablation without extra work later.
+**Options considered:** untied embeddings (rejected, D-014/parameter-allocation math above);
+derived head_dim (rejected, less comparable across tiers); dropout 0.1 (rejected, matches
+neither modern practice nor our token-budget regime); "scaled" init as the default instead of
+"gpt2" (rejected — GPT-2 init is the better-established default to build confidence in the
+training loop against; "scaled" kept available for comparison).
+**Why:** These are exactly the phase-3 spec's own recommendations; applied directly as the
+logged default per CLAUDE.md's teaching-mode clause ("apply the logged default") since spec
+already gave the trade-off reasoning — the round-trip questions this session were reserved for
+the higher-uncertainty tier-size/aspect-ratio/data-budget choices (D-015).
+**Revisit if:** phase 4 training shows instability at init that GPT-2 init should have
+prevented (check the "scaled" variant), or val loss shows the corpus's repetition count made
+dropout=0.0 a mistake.
+
+<!-- Append new decisions below. Next ID: D-017 -->

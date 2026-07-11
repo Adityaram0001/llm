@@ -1,0 +1,33 @@
+# S-tier — ablation workhorse (minutes-1h runs on MPS). See D-015 for the sizing derivation.
+#
+# Param breakdown (vocab=16000, tied embeddings, head_dim=64, swiglu ffn_mult=8/3):
+#   embed   3.07M  (31.6%)
+#   attn    2.21M
+#   ffn     4.42M
+#   norms   0.01M
+#   ---------------
+#   total   9.71M  (active/non-embedding: 6.64M)
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 3
+n_kv_heads: 3       # == n_heads -> plain MHA; set < n_heads for a GQA/MQA ablation
+head_dim: 64
+max_seq_len: 512    # matches CLAUDE.md's default training seq_len
+dropout: 0.0        # modern pretraining default (D-016); revisit only if overfitting on repeats
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667    # 8/3: keeps SwiGLU's 3-matrix param count ~= a 4x-hidden GELU MLP's 2 (D-016)
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2

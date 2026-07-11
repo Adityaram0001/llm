@@ -41,9 +41,10 @@ stay loadable).
 Implementer: compute exact counts, print a per-component breakdown (embed/attn/ffn/head %),
 adjust to hit tiers, put the table in the shape notebook AND in configs as comments.
 
-**⚠ The table above is PROVISIONAL (written pre-tokenizer).** Vocab is now fixed at 16,384
-(D-014), so finalizing tier sizes is a first-class decision of this phase (supersedes D-001's
-sizes; see RW-2 and `docs/learnings/20260711_parameter-allocation.md`). Present to the user:
+**⚠ The table above is PROVISIONAL (written pre-tokenizer).** Vocab is now fixed at 16,000
+(D-014; corrected from an earlier "16,384" typo in this spec — see D-015's correction note),
+so finalizing tier sizes is a first-class decision of this phase (supersedes D-001's sizes; see
+RW-2 and `docs/learnings/20260711_parameter-allocation.md`). Present to the user:
 - per-component allocation for 2–3 candidate L sizes (e.g. ~105M / ~125M / ~160M), tied,
   showing **non-embedding ("active") params** separately — that's the number that predicts
   capability (Kaplan/Chinchilla count it, embeddings are lookups not compute);
