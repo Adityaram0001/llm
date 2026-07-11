@@ -222,4 +222,39 @@ still under the 2GB threshold, so no separate re-confirmation was sought.
 supplement mixing ratio needs tuning — it's stored separately today, not mixed into the
 books:dictionary training stream (see `configs/corpus.yaml` `supplement.tinystories`).
 
-<!-- Append new decisions below. Next ID: D-014 -->
+## D-014 — Project tokenizer: HF byte-level BPE, 16k vocab  (2026-07-10, phase 2)
+**Decision:** The project tokenizer is **HF byte-level BPE at 16k vocab**
+(`data/tokenized/tokenizers/hf_bpe_16k/`), trained on the S-tier corpus (books train split +
+`dictionary_prose.txt`, per D-006) via `src/llmlab/tokenizer/train_hf.py`
+(`ByteLevelBPETokenizer`, `add_prefix_space=False`, `min_frequency=2`). Special tokens:
+`<|endoftext|>`, plus `<|pad|>`/`<|user|>`/`<|assistant|>` reserved now for phase 8 chat
+fine-tuning so their IDs never shift later. Corpus tokenized to
+`data/tokenized/hf_bpe_16k/{train,val}.bin` (uint16 memmap) via `scripts/tokenize_corpus.py`.
+
+**Options considered (measured in `notebooks/03_tokenizer_compare.ipynb`, held out of ALL
+training):** HF BPE at 8k / 16k / 32k, GPT-2's own 50k-vocab tokenizer (reference, never
+trained on our data), and the from-scratch BPE from notebook 02 (8k vocab, but trained on
+only one book — pure-Python training can't afford the full corpus, so not a fair candidate,
+included for completeness only).
+
+| metric | 8k | 16k | 32k | gpt2 (50k) |
+|---|---|---|---|---|
+| fertility, held-out books (tok/word) | 1.612 | 1.500 | 1.427 | 1.469 |
+| fertility, held-out dictionary | 2.068 | 1.927 | 1.815 | 1.829 |
+| vocab utilization on held-out text | 87.7% | 71.3% | **49.3%** | 30.6% |
+| avg pieces per obscure headword (n=20) | 4.40 | 3.80 | 3.45 | 3.45 |
+| embed+unembed cost, tied/untied, @d_model=768, 100M budget | 6.1/12.3% | 12.3/24.6% | **24.6/49.2%** | 38.6/77.2% |
+
+**Why:** Every metric shows the same diminishing-returns shape: 8k->16k buys most of the
+fertility and rare-word gain (e.g. fertility +7.0% on books, rare-word pieces -0.60), and
+16k->32k buys much less on top (+4.9%, -0.35) while roughly doubling the embedding-table's
+share of a 100M-param budget (12-25% at 16k vs 25-49% at 32k, tied/untied) and dropping vocab
+utilization on our own held-out text to under half (32k's extra merges are largely
+document-specific artifacts that don't generalize even within our corpus). GPT-2's 50k vocab
+confirms the domain-mismatch risk of an off-the-shelf tokenizer: only 30.6% of it ever fires
+on our philosophy/dictionary text. User reviewed this table and chose 16k over 8k/32k.
+**Revisit if:** phase 3's actual `d_model`/param budget ends up far from the 768/100M used
+for the illustrative embedding-cost math, or a later phase adds a very different-domain data
+source (code, modern web text) where 16k's fertility on that domain turns out poor.
+
+<!-- Append new decisions below. Next ID: D-015 -->
