@@ -354,4 +354,45 @@ the higher-uncertainty tier-size/aspect-ratio/data-budget choices (D-015).
 prevented (check the "scaled" variant), or val loss shows the corpus's repetition count made
 dropout=0.0 a mistake.
 
-<!-- Append new decisions below. Next ID: D-017 -->
+## D-017 — Cloud packaging & data logistics: Docker image + R2 bucket; tokenize locally  (2026-07-11, pre-phase-4)
+**Decision:** (a) Custom Docker image (`docker/Dockerfile`, deps-only, CUDA-12.8 torch base for
+the sm_120 RTX 5090) built from the Mac with `buildx --platform linux/amd64`, pushed to Docker
+Hub; pods start from a provider template with env vars, and `docker/entrypoint.sh` clones the
+repo + pulls data automatically → billed cold-start ≈ 2–4 min. Rebuild only on dependency
+changes; code moves via git, data via bucket. (b) Tokenized `.bin` shards live in a
+**Cloudflare R2** bucket (free 10GB tier, zero egress fees), pushed once from the Mac via
+`scripts/cloud/data_push.sh` (rclone), pulled by pods at datacenter speed. Checkpoints during
+multi-day runs also rclone'd to the bucket from the pod. (c) **All tokenization happens on the
+Mac** — BPE encoding is multithreaded CPU (Rust) work, ~under an hour for the full ~2.1–2.5B
+tokens, GPU irrelevant; pods only ever download finished bins.
+**Options considered:** data baked into the image (bloated, rebuild per data change, slow
+registry pulls) vs rsync from Mac each rental (5GB over home upload = 20–45 min of billed pod
+time) vs object storage (upload once off-clock, <1 min pulls, free egress on R2) — bucket wins;
+stock pod image + pip-on-boot (5–15 min billed, drifting versions) vs custom image — image wins
+for repeated rentals, rsync flow kept as fallback; B2/S3 vs R2 — R2's zero egress suits
+repeated pulls.
+**Impacts:** CLOUD.md gained three sections (Docker fast-start, Data logistics, Tokenization
+is CPU work); repo needs a GitHub remote + Docker Hub account (one-time user setup, phase-4
+session walks through it); RW-1 now specifies local tokenization + `data_push.sh` as its final
+step.
+**Revisit if:** R2 free tier is exceeded (hero-scale data + checkpoints may brush 10GB — prune
+old checkpoint copies or pay ~$0.015/GB/mo) or a provider's network-volume ends up cheaper for
+a long experiment series pinned to one region.
+
+## D-018 — GPU rental sizing + batch-size policy: rent $/FLOP not VRAM; calibrate once, never auto-adjust  (2026-07-11, pre-phase-4)
+**Decision:** (a) Default rental = RTX 5090; RTX PRO 6000 (96GB) rejected for now — same
+Blackwell/sm_120 generation (same image, same code, zero changes to switch), but our 105M
+model + optimizer + activations uses a few GB, so 96GB VRAM at ~2× the hourly rate buys
+nothing. Re-evaluate only if a workload is actually VRAM-bound. (b) Batch-size policy:
+`scripts/find_batch_size.py` (phase-4 deliverable) calibrates micro-batch per hardware in a
+~2-min pre-run sweep; **effective batch is fixed in config, micro_batch × grad_accum
+re-factorizes it per machine; no dynamic/runtime batch adjustment** — effective batch is a
+hyperparameter, drifting it mid-run destroys ablation comparability. Monitoring = tokens/sec
+in metrics.jsonl (ground truth) + wandb system charts (GPU util/power/VRAM) when online.
+**Why:** utilization% can read high while bandwidth-bound — tokens/sec is what we pay for;
+phase 0's MPS throughput-cliff finding showed measuring beats assuming on every new hardware.
+**Revisit if:** models grow past ~1B-param scale (VRAM starts mattering) or variable-length
+SFT batching (phase 8) wants token-count-based bucketing — that's a different, legitimate
+kind of dynamic batching.
+
+<!-- Append new decisions below. Next ID: D-019 -->

@@ -57,6 +57,9 @@ micro-batch vs accumulation equivalence check; weight tying on/off; `torch.compi
   (overfitting lab).
 - Dictionary ablation: with vs without dictionary in the mix → does "define X" eval improve?
   (needs P6 probes; can run later)
+- **Domain-mix ablation (RW-4):** finance+wisdom share of the training stream at 10% vs 25%
+  vs 50% (fixed total tokens, domain repetition ≤4 epochs) → domain probes vs general val
+  loss. The specialization-vs-generality tradeoff, measured — the user's flagship data question.
 - Mini scaling law: 5/10/25/50M params at fixed 200M tokens → fit L(N)=aN^-α + c, compare α
   to Chinchilla's. `notebooks/07_scaling_law.ipynb`.
 

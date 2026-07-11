@@ -18,8 +18,13 @@ metric does and doesn't tell you. Built once, used by phases 5/8/9 forever after
      (b) *multiple-choice define*: right definition vs 3 shuffled wrong ones by total
      log-likelihood → accuracy (chance=25%);
      (c) *cloze*: mask the headword given the definition.
-   - **Generation battery**: 15 fixed prompts (story openers, "Define X:", book-style prose)
-     at temp 0.8/top-p 0.95, saved side-by-side across checkpoints for eyeballing.
+   - **Domain probes — finance/wisdom (RW-4):** same MC-by-loglik pattern as dictionary
+     probes, built from held-out domain text: finance-term definitions, proverb/maxim
+     completion, "sound advice vs nonsense" pairs (data factory can generate these). Measures
+     whether the domain mixing actually steered the model.
+   - **Generation battery**: 15 fixed prompts (story openers, "Define X:", book-style prose,
+     + finance/wisdom prompts like "The first rule of saving money is") at temp 0.8/top-p
+     0.95, saved side-by-side across checkpoints for eyeballing.
    - **Repetition/diversity metrics**: distinct-n, repetition rate on generations.
 3. **Standard benchmarks (tiny-model-appropriate, via manual implementation not lm-eval-harness
    — implementing them IS the lesson):**

@@ -27,8 +27,58 @@ CUDA + PyTorch preinstalled. You get SSH access as root. Its disk is (mostly) ep
 3. wandb: for cloud runs flip to **online** mode (`WANDB_MODE=online`, `wandb login` on the
    pod with your API key from wandb.ai/authorize) — live monitoring from the Mac's browser is
    exactly what you want during a paid run. (Local D-009 offline default is unchanged.)
+4. **Data bucket** (D-017): create a Cloudflare R2 bucket `llmlab` (free tier: 10GB storage,
+   **zero egress fees** — that's why R2 over S3) + an API token. On the Mac:
+   `brew install rclone`, then `rclone config` → new remote `r2`, type `s3`, provider
+   `Cloudflare`, paste key/secret/endpoint. Test: `rclone lsd r2:`.
+5. **Docker image** (D-017): `docker buildx build --platform linux/amd64 -f docker/Dockerfile
+   -t docker.io/<you>/llmlab:0.1 --push .` (needs Docker Desktop + a free Docker Hub account).
+   Rebuild only when `requirements.txt` changes. The `--platform linux/amd64` flag is
+   mandatory from Apple Silicon — an arm64 image will not run on rental pods.
 
-## Per-run workflow
+## Docker fast-start (the preferred flow once set up — D-017)
+
+Why: with a stock pod image you pay ~5–15 min of billed setup per rental (pip installs, tool
+installs, transfers) and pip may resolve different versions over time. With our image, the pod
+boots with everything preinstalled and *pulls code + data itself*:
+
+1. In the provider console, create a **pod template** pointing at `docker.io/<you>/llmlab:0.1`
+   with env vars: `GIT_REPO_URL` (this repo — push it to GitHub first), `GIT_BRANCH`,
+   `DATA_REMOTE=r2:llmlab/data/tokenized/hf_bpe_16k`, `WANDB_API_KEY`, and the five
+   `RCLONE_CONFIG_R2_*` vars (see `docker/entrypoint.sh` header). Secrets live in the
+   template, never in the repo.
+2. Rent pod from the template → SSH in → `llmlab-entrypoint bash` (or it already ran as init)
+   → code cloned, data pulled at datacenter speed (~1 min for 5GB), CUDA verified →
+   `tmux new -s train` → train. **Cold start ≈ 2–4 minutes of billed time.**
+3. Code changed on the Mac? `git push`, then on the pod `git -C /workspace/llm-lab pull` —
+   no image rebuild. Rebuild only for dependency changes.
+
+The rsync flow below remains the fallback (first-ever rental, or no GitHub/Docker Hub setup).
+
+## Data logistics (D-017): what lives where
+
+| Artifact | Home | Transport | Why |
+|---|---|---|---|
+| Code | GitHub repo | `git clone/pull` on pod | small, changes often — never bake into image |
+| Deps | Docker image | `docker pull` by provider | change rarely; pinned = reproducible |
+| Tokenized data (`.bin` + tokenizer + meta) | **R2 bucket** (uploaded once via `scripts/cloud/data_push.sh`) | `rclone copy` on pod (entrypoint does it) | ~5GB at hero scale: from the Mac's home upload that's 20–45 min of billed pod time per rental; from R2 it's <1 min, and R2 egress is free |
+| Raw text corpus | Mac only (+ rebuildable via `build_corpus.py`) | never shipped | pods only need tokens |
+| Checkpoints/metrics during a run | pod disk → synced out | `sync_down.sh` to Mac, and/or `rclone copy experiments/ r2:llmlab/experiments/` from the pod (belt-and-braces for multi-day runs) | pod disk dies with the pod |
+| **Never in the image:** data, checkpoints, secrets | | | image = tools, not state |
+
+Rule of thumb: **anything ≥1GB moves Mac↔pod only via the bucket**, not rsync — home upload
+bandwidth on a billed clock is the single biggest avoidable cost for us.
+
+## Tokenization is CPU work — always do it on the Mac (D-017)
+
+BPE encoding is pure CPU/string processing (HF `tokenizers` is multithreaded Rust) — a GPU is
+useless for it. The full ~2.1–2.5B-token corpus (~10GB raw text) tokenizes on the M4 in
+roughly under an hour, producing ~4–5GB of uint16 `.bin`. Do it locally (chunked/streaming —
+never hold the corpus in RAM; append to the memmap incrementally), verify by decoding random
+slices, `data_push.sh` once — pods never tokenize, they just `rclone` the finished bins.
+uint16 memmaps are byte-portable Mac↔Linux, no conversion needed.
+
+## Per-run workflow (rsync fallback — use the Docker fast-start above once it's set up)
 
 ### 1. On the Mac — prepare (GPU clock NOT running)
 - Freeze the run config in `configs/`, smoke-test the exact command locally for ~100 steps.

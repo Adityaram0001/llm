@@ -7,7 +7,14 @@ ablation lab is just "new config, `python scripts/train.py`".
 
 ## Deliverables
 
-0. **Portability requirement (D-010):** the whole engine must run unchanged on MPS (local)
+0a. **Data prep first (RW-1, per D-015/D-017):** extend `scripts/tokenize_corpus.py` to
+   tokenize TinyStories + the FineWeb-Edu sample (get the >2GB download go-ahead; stream via
+   HF `datasets`, keep only the needed sample) into separate shards
+   `data/tokenized/hf_bpe_16k/supplement_{tinystories,fineweb}.bin` — Mac-local, CPU-only,
+   chunked/streaming (batch-encode ~10–50MB of text at a time, append to the memmap, never
+   hold the corpus in RAM). Loader takes per-source mixing weights from the train config.
+   Final step: `scripts/cloud/data_push.sh` to the bucket (needs RW-3 done once).
+0b. **Portability requirement (D-010):** the whole engine must run unchanged on MPS (local)
    and CUDA (rented pod) — follow `docs/CLOUD.md` rules: `get_device()`/`autocast_ctx()` from
    `llmlab.utils`, DataLoader `num_workers`/`pin_memory` as config keys, `map_location` on
    load, TF32 + optional `compile: true` config flag for CUDA. Acceptance: `--device cpu`
@@ -33,6 +40,12 @@ ablation lab is just "new config, `python scripts/train.py`".
 3. **`scripts/train.py`** — CLI: `python scripts/train.py --config configs/train_s_baseline.yaml
    [--resume experiments/<run_id>]`. Auto-creates run folder, dumps resolved config, appends
    registry row at end.
+3b. **`scripts/find_batch_size.py`** (D-018): pre-run calibration, not a runtime controller —
+   given a model+train config, sweep micro-batch (doubling until OOM or tokens/sec plateau,
+   ~2 min), report the sweet spot + memory at each point. Run it once per new hardware
+   (Mac, 5090, …) before launching. **Effective batch stays FIXED in the config;
+   micro_batch × grad_accum re-factorizes it per hardware** — never auto-adjust batch size
+   mid-run (it's a hyperparameter; drifting it kills run comparability).
 4. **First experiments (register all):**
    - `p4_smoke`: S-tier, 10 min run — everything works end to end
    - `p4_s_baseline`: S-tier, ~100M tokens on books+dictionary (~1–2h). THE reference run.
