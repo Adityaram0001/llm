@@ -87,6 +87,13 @@ the first big run is actually needed (phase 4 M-tier or phase 9).
   val tokens (3 docs)
 - [x] PROGRESS.md + DECISIONS.md updated (D-014); phase marked done
 
+## Rework queue (see CLAUDE.md "Change management")
+
+| ID | What | Why | Fix in phase | Status |
+|----|------|-----|--------------|--------|
+| RW-1 | Tokenize TinyStories supplement (+any added corpus) with hf_bpe_16k → `data/tokenized/hf_bpe_16k/supplement_*.bin`; extend `scripts/tokenize_corpus.py` | Supplement was left raw-only in phase 2 by design; needed once M/L-tier runs mix it in. Final size depends on the phase-3 tier/data-budget decision | 4 (before first M-tier run) | todo |
+| RW-2 | If phase 3 grows L-tier beyond ~105M: recompute D-008 wall-clock extrapolations + D-010 cloud cost estimate; check corpus covers ≥20 tok/param or log the deliberate shortfall | Tier sizes set pre-tokenizer (D-001) are being finalized vocab-aware in phase 3 | 3 | todo |
+
 ## Run ledger (latest 10 — full list in experiments/registry.csv)
 
 5 non-training comparison rows from the phase-2 tokenizer study (`20260710_p2_tokenizer-*`) —
@@ -95,7 +102,10 @@ environment + data + tokenizer setup).
 
 ## Notes for next session
 
-- Start with Phase 3. Read `docs/phases/phase3_architecture.md`.
+- Start with Phase 3. Read `docs/phases/phase3_architecture.md`. Its decision points now
+  include **finalizing tier parameter counts vocab-aware** (user explicitly wants the
+  parameter-allocation reasoning surfaced — see `docs/learnings/20260711_parameter-allocation.md`)
+  and the coupled data-budget check (RW-2).
 - Tokenizer is decided (D-014): **HF BPE, 16k vocab**, files at
   `data/tokenized/tokenizers/hf_bpe_16k/` (tokenizer itself) and
   `data/tokenized/hf_bpe_16k/{train,val}.bin` + `meta.json` (tokenized corpus, uint16 memmap,

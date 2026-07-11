@@ -86,6 +86,39 @@ has fine-tuned LLMs) but is learning LLM internals hands-on. Therefore:
   automation against DeepSeek's web UI** (ToS violation; logged D-004). The DeepSeek API is a
   supported optional backend if the user enables it.
 
+## Change management (when new learning invalidates old work)
+
+Decisions WILL be revised as the user learns — that's the point of the project. The mechanism:
+
+1. A revised decision gets a NEW entry in DECISIONS.md (never edit the old one) that names the
+   entry it supersedes, plus an **Impacts:** line listing affected artifacts/phases.
+2. Every impacted artifact becomes a row in the **Rework queue** in PROGRESS.md
+   (`RW-N | what | why (D-xxx) | fix in phase | status`). Completed phases are NOT reopened
+   ad hoc — rework rows are picked up at the start of whichever phase they're tagged to.
+3. Sessions must check the rework queue at session start (it's part of PROGRESS.md) and pick up
+   rows tagged for the active phase before new work.
+4. Never silently redo old work: if you find yourself changing a completed phase's artifact,
+   there must be a D-entry + RW-row explaining why.
+
+## Discussion sessions (learning-capture protocol)
+
+The user will open chats purely to ask questions, clarify concepts, and reflect — no
+implementation. Trigger: the user opens with **"Discussion session: <topic>"** (any phrasing
+that clearly says discussion/doubts/concepts counts).
+
+Rules for such sessions:
+- Read PROGRESS.md + relevant phase spec/decisions first, as usual — answers must reflect the
+  project's actual state and numbers, not generic theory.
+- Teaching mode, depth over speed. Diagrams/tables/worked arithmetic encouraged. It's fine to
+  reference code, but **change no code and no specs** — if the discussion uncovers needed
+  changes, log a decision + rework-queue row instead (that's the paper trail).
+- **Before the session ends, write a learning note** to `docs/learnings/YYYYMMDD_<slug>.md`:
+  the user's questions, the explanations that clicked (with the actual numbers/math used),
+  misconceptions corrected, takeaways, and links to related D-entries/runs/papers. Style:
+  written for the user's future revision, not a chat transcript.
+- Add one line to `docs/learnings/INDEX.md` (newest first). If any decision/rework rows were
+  spawned, update DECISIONS.md/PROGRESS.md per the change-management protocol above.
+
 ## Things NOT to do
 
 - Don't install CUDA-only packages (flash-attn, bitsandbytes, deepspeed, xformers) — Apple Silicon.

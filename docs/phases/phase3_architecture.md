@@ -41,6 +41,22 @@ stay loadable).
 Implementer: compute exact counts, print a per-component breakdown (embed/attn/ffn/head %),
 adjust to hit tiers, put the table in the shape notebook AND in configs as comments.
 
+**⚠ The table above is PROVISIONAL (written pre-tokenizer).** Vocab is now fixed at 16,384
+(D-014), so finalizing tier sizes is a first-class decision of this phase (supersedes D-001's
+sizes; see RW-2 and `docs/learnings/20260711_parameter-allocation.md`). Present to the user:
+- per-component allocation for 2–3 candidate L sizes (e.g. ~105M / ~125M / ~160M), tied,
+  showing **non-embedding ("active") params** separately — that's the number that predicts
+  capability (Kaplan/Chinchilla count it, embeddings are lookups not compute);
+- aspect-ratio choice at fixed budget: wider-shallower (GPT-2-style 12×768) vs
+  deeper-narrower (modern small-model style, e.g. 20–30 layers × 512–640) — recommend one,
+  note depth-vs-width as a P5-G ablation candidate;
+- the coupled **data budget**: Chinchilla ~20 tok/param vs available corpus (17.7M core +
+  ~500M TinyStories raw + optional FineWeb-Edu sample), incl. the multi-epoch reality
+  (Muennighoff '23: up to ~4 epochs of repeated data ≈ nearly as good as fresh) — the chosen
+  L size directly sets what RW-1 must tokenize and whether more corpus is needed (ask before
+  downloading >2GB, per CLAUDE.md).
+Log the outcome as a new D-entry; update RW-1/RW-2 rows.
+
 ## Deliverables
 
 1. The model package, importable, unit-tested: **`tests/test_model.py`** — shapes; causal mask
