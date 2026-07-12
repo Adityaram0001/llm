@@ -44,6 +44,19 @@ tokens_trained_M, final_val_loss, final_ppl, wall_hours, wandb_url, verdict(one 
    defines the "not real unless bigger than this" threshold quoted in every verdict.
 6. **Conclusion in notes.md + verdict in registry.csv** right after the run, while it's fresh.
 
+## Seed noise floor (phase 5, established 2026-07-12)
+
+S-tier baseline recipe (`configs/train_s_baseline.yaml`, D-021), 3 seeds, 1500 steps / 98.3M
+tokens each: seed 1337 (`20260711_p4_s-baseline`) val_loss 3.5037; seed 1338
+(`20260712_p5_s-seed-1338`) 3.4970; seed 1339 (`20260712_p5_s-seed-1339`) 3.5121.
+
+**mean = 3.5043, std = 0.0062, spread (max-min) = 0.0150.**
+
+**Rule for every Wave A-G verdict:** a val_loss delta from its named baseline smaller than
+~0.015-0.02 is within the seed-noise floor and must be reported as "not distinguishable from
+noise," not as a real effect. Deltas should be compared against this floor explicitly in each
+run's notes.md conclusion, not just eyeballed. See D-035.
+
 ## Comparison studies
 
 `notebooks/compare_runs.ipynb` (built in phase 4) loads registry.csv + any set of

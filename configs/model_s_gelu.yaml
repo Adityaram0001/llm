@@ -1,0 +1,29 @@
+# Wave A ablation: SwiGLU -> plain GELU MLP, everything else identical to model_s.yaml (D-016
+# defaults). ffn_mult raised from 8/3 to 4 to match SwiGLU's param count: SwiGLU has 3 weight
+# matrices (gate/up/down) at hidden=8/3*d_model -> 3*(8/3)=8 d_model^2 total; GELU has 2
+# matrices (fc_in/fc_out) so needs hidden=4*d_model -> 2*4=8 d_model^2 to match. See
+# docs/phases/phase5_ablations.md Wave A ("match param count by shrinking ffn_mult -- explain!").
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 3
+n_kv_heads: 3
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: gelu             # ABLATED from swiglu
+ffn_mult: 4.0         # matches SwiGLU's 8/3 param count (see comment above)
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2

@@ -3,11 +3,20 @@
 > Every Claude session reads this first and updates it last. Keep it honest and terse.
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
-**Active phase:** Phase 4 is **done** (milestone M1 declared, see exit-criteria check below) —
-Phase 5 (`docs/phases/phase5_ablations.md`) is next, not yet started as of this update.
+**Active phase:** Phase 4 is **done** (milestone M1 declared). Phase 5
+(`docs/phases/phase5_ablations.md`) is **in-progress**: the mandatory seed-noise study is done
+(D-035, noise floor = 0.015 spread) — Wave A (norms & activations) is next, not yet started.
 **Last session:** 2026-07-11 evening through 2026-07-12 — built the whole training engine
 (deliverables 0b, 1, 2, 3, 3b), ran the first real experiments including an unattended overnight
 lr-sweep + baseline pipeline, then reviewed the results.
+**Same-day update (2026-07-12, phase 5 start):** ran the phase-5 seed-noise study (2 more seeds
+on top of the existing baseline) on the still-running RTX 5090 gpuhub instance (left up since the
+D-034 benchmark session) — see D-035. Noise floor: mean val_loss 3.5043, std 0.0062, spread
+0.0150 across seeds 1337/1338/1339. This is also the first real (non-sweep) confirmation that a
+full training loop runs correctly on gpuhub's CUDA hardware (~126K tok/s, ~13min/run vs Mac's
+2.4hr). **Wave A's model code needs zero new implementation** — `norm`/`norm_position`/`ffn`/
+`qk_norm` are all already wired in `src/llmlab/model/{norms,block,ffn,attention}.py` per phase 3;
+Wave A is purely 4 configs + 4 runs + analysis.
 
 Built: `src/llmlab/data/loader.py` (`MixedSourceLoader`/`Source` — memmap random-offset
 sampling, stateless given `(seed, step)` so resume needs no sampler state, per-source mixing
@@ -76,7 +85,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 | 2 | Tokenizers (scratch + HF) | `docs/phases/phase2_tokenizer.md` | done |
 | 3 | Model architecture | `docs/phases/phase3_architecture.md` | done |
 | 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | done |
-| 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | todo |
+| 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | in-progress |
 | 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | todo |
 | 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | todo |
 | 8 | Fine-tuning: SFT / LoRA / DPO | `docs/phases/phase8_finetuning.md` | todo |
@@ -164,6 +173,35 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 - [x] 5. `notebooks/05_compare_runs.ipynb` — executes cleanly, includes a numbers-grounded
   "reading a loss curve" section; sections 4 (lr sweep) and the baseline cell will populate once
   the overnight pipeline's runs exist
+
+## Phase 5 checklist (in-progress)
+
+- [x] Seed-noise study: `20260712_p5_s-seed-{1338,1339}` + reused `20260711_p4_s-baseline` as
+  seed 1/3 → noise floor mean 3.5043, std 0.0062, **spread 0.0150** (D-035, logged in
+  `docs/EXPERIMENTS.md`). Ran on the still-live RTX 5090 gpuhub instance (`scripts/cloud/
+  remote.env`, port 25864 as of this update — **instance was left running after this session,
+  check whether it's still up/billing before the next session** since gpuhub host/port can
+  change on stop/restart).
+- [x] Wave A — Norms & activations (4 runs, D-036): RMSNorm→LayerNorm **borderline** (-0.0158,
+  at the noise floor, RMSNorm kept for compute cost); pre→post norm **negative result as
+  predicted** (stagnates ~loss 6.8 by step 150, degenerate samples, NOT a blow-up — grad_norm
+  stayed ≤1.52); SwiGLU→GELU (param-matched) **real, robust loss** (SwiGLU wins by ~0.17-0.2,
+  confirms D-016); **+QK-norm real, robust WIN** (-0.062, gap widening over training — best of
+  the wave, a genuine surprise, recommend as new default going forward). Figure:
+  `docs/results/wave_a_norms_activations.png`. Summary: `docs/results/ablation_log.md`.
+- [ ] Wave B — Positional encodings (4-5 runs + length-extrapolation probe, train@512/eval@1024/2048)
+- [ ] Wave C — Attention variants (MHA/MQA/GQA/MLA) + KV-cache-bytes + gen tok/s — MLA needs a
+  full session, `notebooks/06_mla_explained.ipynb`
+- [ ] Wave D — Optimizers & schedules (AdamW sweeps, Lion, Muon, cosine/WSD/constant, z-loss,
+  batch-size study, grad-clip-off spike demo)
+- [ ] Wave E — Efficiency & memory (bf16 vs fp32, grad checkpointing, micro-batch/accum
+  equivalence, weight tying, torch.compile attempt, activation-memory-vs-seq-len)
+- [ ] Wave F — DeepSeek specials (MoE w/ aux-loss vs aux-loss-free, MTP) — needs RW-5 fixed for
+  full context-length work but MoE/MTP themselves don't require it
+- [ ] Wave G — Data & scaling (multi-epoch overfitting lab, dictionary ablation, RW-4 domain-mix
+  ablation, mini scaling law `notebooks/07_scaling_law.ipynb`)
+- [ ] Exit criteria: waves A-D done + verdicts (M2), figures in `docs/results/`, all runs
+  registered, `docs/results/recipe.md` written
 
 ## Rework queue (see CLAUDE.md "Change management")
 

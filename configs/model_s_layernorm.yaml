@@ -1,0 +1,26 @@
+# Wave A ablation: RMSNorm -> LayerNorm, everything else identical to model_s.yaml (D-016
+# defaults). See docs/phases/phase5_ablations.md Wave A.
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 3
+n_kv_heads: 3
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: layernorm      # ABLATED from rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2

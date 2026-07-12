@@ -1068,4 +1068,96 @@ edge past its ~98% price premium — extrapolating the L-tier trend (20.4%→30.
 that crossover looks far beyond any context length this project currently plans to use, but
 worth re-checking if that assumption changes.
 
-<!-- Append new decisions below. Next ID: D-035 -->
+## D-035 — Phase 5 seed-noise floor established: std 0.0062, spread 0.0150 across 3 seeds; first real training confirmation of RTX 5090 throughput (2026-07-12, phase 5)
+**Decision:** Ran phase 5's mandatory first task (`docs/phases/phase5_ablations.md` "Standing
+protocol") — the S-tier baseline recipe (D-021) at 3 seeds, 1500 steps/98.3M tokens each. Reused
+`20260711_p4_s-baseline` (seed=1337) as seed 1/3 rather than re-running it, and added
+`20260712_p5_s-seed-{1338,1339}` for seeds 2-3 — identical config in every other respect
+(`configs/train_s_seed_{1338,1339}.yaml`, only `seed`/`phase`/`baseline_run`/`variable_changed`
+differ from `train_s_baseline.yaml`; micro_batch/grad_accum deliberately left at the Mac-tuned
+16/8, not GPU-tuned, so seed was the only variable per the ablation protocol's rule 1).
+
+**Result: mean val_loss 3.5043, std 0.0062, spread (max-min) 0.0150** (1337: 3.5037, 1338:
+3.4970, 1339: 3.5121). Logged in `docs/EXPERIMENTS.md` as the standing rule: any later Wave A-G
+verdict with a val_loss delta smaller than ~0.015-0.02 from its named baseline must be reported
+as within-noise, not a real effect.
+
+**Both seed runs executed on the already-running RTX 5090 gpuhub instance** (left up since the
+D-034 benchmark session, still billing at $0.46/hr, reachable via `scripts/cloud/remote.env`) —
+the user chose cloud over local Mac when asked, since it was already paid-for/idle and ~50x
+faster (12.7-13.4 min wall-clock per run vs the Mac baseline's 2.4hr). **This is the first real
+(non-benchmark-sweep) confirmation that a full training loop actually achieves the throughput
+D-032/D-034's forward+backward-only sweeps predicted**: ~126K tok/s observed vs the sweep's
+~630K peak (sweep numbers use a GPU-tuned micro_batch=64; these runs kept the Mac's
+micro_batch=16 to hold the ablation config fixed, so the two numbers aren't directly comparable,
+but 126K is well within plausible range and confirms the pipeline works end-to-end on real
+gpuhub CUDA hardware, not just in isolated fwd/bwd sweeps).
+
+**Options considered:** re-run the seed=1337 baseline a 4th time for symmetry (rejected — the
+existing baseline run is byte-for-byte the same config modulo seed, re-running it would only
+burn GPU time to confirm what's already registered); run all 3 seeds on Mac (rejected by the
+user in favor of the idle already-billing cloud instance).
+**Why this matters:** phase 5's entire verdict methodology (Wave A onward) depends on having a
+noise floor to compare against — without it, a 0.01 val_loss difference between a technique and
+its baseline would look meaningful when it's actually noise.
+**Impacts:** `docs/EXPERIMENTS.md` (noise-floor section + rule), `experiments/registry.csv` (2
+new rows), `experiments/20260712_p5_s-seed-{1338,1339}/` (config+metrics+samples+notes.md,
+checkpoints left on the remote instance only — not pulled back, not needed for comparison).
+**Revisit if:** a Wave A-G run shows a delta close to the 0.015-0.02 boundary — consider a 4th/
+5th seed to tighten the estimate before trusting a borderline verdict either way.
+
+## D-036 — Wave A (norms & activations) complete: QK-norm is a real win, SwiGLU confirmed over GELU, post-norm fails by stagnation not blow-up, RMSNorm-vs-LayerNorm is a wash (2026-07-12, phase 5, RW-3's live 5090 instance)
+**Decision:** Ran all 4 Wave A ablations (`docs/phases/phase5_ablations.md`) same-session as the
+seed-noise study, same RTX 5090 instance, same baseline (`20260711_p4_s-baseline`), same seed
+(1337, since Wave A isn't testing seed variance) — only the model config axis under test differs
+each time. **No new model code was needed**: `norm`/`norm_position`/`ffn`/`qk_norm` were all
+already wired in phase 3 (`src/llmlab/model/{norms,block,ffn,attention}.py`); this wave was
+config+run+analysis only, verified locally (`GPT(cfg)` builds + param-count sanity check for all
+4 variants) before spending any GPU time.
+
+**Results (val_loss delta vs baseline, judged against the D-035 noise floor of 0.0150):**
+| Ablation | final val_loss | delta | verdict |
+|---|---|---|---|
+| RMSNorm -> LayerNorm | 3.4878 | -0.0158 | borderline (right at noise floor) |
+| pre-norm -> post-norm | 6.8810 | +3.377 | negative result, as the spec predicted |
+| SwiGLU -> GELU (param-matched, ffn_mult 8/3->4.0) | 3.6764 | +0.173 | real, robust — SwiGLU wins |
+| +QK-norm | 3.4414 | -0.0622 | real, robust — **best of the wave** |
+
+Every delta was checked against the *full per-checkpoint trajectory* (not just the final step)
+per EXPERIMENTS.md's judging rule — RMSNorm/LayerNorm's gap stayed near the noise floor the whole
+second half of training (genuinely marginal, not just a lucky final read); SwiGLU/QK-norm's gaps
+were consistent or widening throughout (genuinely real, not early-training noise that faded).
+
+**Post-norm's failure mode is worth recording precisely**: it did NOT diverge/spike
+(grad_norm stayed <=1.52 throughout, under grad_clip=1.0) — it stagnated near loss~6.8 by step
+~150 and never moved again, with degenerate punctuation-soup samples. This is a different
+(and arguably more instructive) failure mode than "instability" usually implies — matches Xiong
+et al. '20's mechanism (un-normalized residual stream dilutes/noises later-layer gradients) more
+precisely than a generic "post-norm is unstable" framing would suggest.
+
+**QK-norm's win was a genuine surprise**: went in expecting a small-or-negligible effect at
+S-tier/15-layer depth (QK-norm is usually framed as a larger-scale stability aid), but it was
+instead the single best result of the wave, with the gap *widening* (not fading) over training —
+a real optimization-quality effect, not a lucky start. Recommending it as a new default going
+forward is a genuine update to D-016's baseline recipe, not just a confirmation of an existing
+choice.
+
+**Options considered:** re-run RMSNorm/LayerNorm at more seeds to resolve the borderline result
+now (rejected — not worth the GPU time/session length to resolve a comparison whose practical
+answer, "keep RMSNorm for its lower compute cost," doesn't change either way); treat post-norm's
+stagnation as a bug and debug/retune its warmup (rejected — the spec explicitly wants this as a
+negative-result control at fixed compute, not a best-effort post-norm implementation).
+**Why this matters:** first real use of the D-035 noise floor to separate "real" from "noise"
+verdicts, and it already mattered in practice (RMSNorm/LayerNorm's result would have looked like
+"LayerNorm wins" without it).
+**Impacts:** `experiments/registry.csv` (4 new rows), `experiments/20260712_p5_s-wave-a-
+{layernorm,postnorm,gelu,qknorm}/` (config+metrics+samples+notes.md; checkpoints left on the
+remote instance, not pulled back), `docs/results/wave_a_norms_activations.png` (comparison
+figure), `docs/results/ablation_log.md` (new file, 5-line-per-wave summary log per phase 5's
+exit-criteria requirement). `docs/results/recipe.md` (phase 9 input) not yet written — waiting
+until more waves land per the phase-5 exit criteria ("best-found recipe" implies waves A-D done).
+**Revisit if:** a later wave's recipe interacts with QK-norm in an unexpected way (e.g. Wave C's
+MLA has its own decoupled-RoPE-key mechanism that might make qk_norm redundant or conflicting —
+check when implementing MLA).
+
+<!-- Append new decisions below. Next ID: D-037 -->

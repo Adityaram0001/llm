@@ -1,0 +1,27 @@
+# Wave A ablation: pre-norm -> post-norm, everything else identical to model_s.yaml (D-016
+# defaults). Expected to be LESS stable at this depth (15 layers) -- a deliberate negative
+# result per docs/phases/phase5_ablations.md Wave A ("expect instability").
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 3
+n_kv_heads: 3
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: rmsnorm
+norm_position: post   # ABLATED from pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2
