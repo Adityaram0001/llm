@@ -14,12 +14,23 @@
 #   GIT_REPO_URL=https://github.com/Adityaram0001/llm.git GIT_BRANCH=main bash gpuhub_setup.sh
 set -euo pipefail
 
+# CONFIRMED LIVE (2026-07-12, RTX 4080 dry-run instance): non-interactive SSH sessions do NOT
+# have conda's python/pip on PATH -- .bashrc's conda-init block is absent until `conda init` has
+# been run once. Fix PATH for this script AND persist it to .bashrc so tmux/future SSH sessions
+# get it too, instead of every command needing an absolute /root/miniconda3/bin/ prefix.
+export PATH="/root/miniconda3/bin:$PATH"
+grep -q 'miniconda3/bin' /root/.bashrc 2>/dev/null || echo 'export PATH="/root/miniconda3/bin:$PATH"' >> /root/.bashrc
+
+# CONFIRMED LIVE: rclone and tmux are NOT preinstalled on the PyTorch/2.8.0/CUDA-12.8 image
+# (tmux gets installed by remote_setup.sh below; rclone needs its own install here).
+command -v rclone >/dev/null || { echo "==> Installing rclone"; curl -fsSL https://rclone.org/install.sh | bash; }
+
 GIT_REPO_URL="${GIT_REPO_URL:-https://github.com/Adityaram0001/llm.git}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 
 # gpuhub's own docs disagree with themselves on the data-disk mount name (autodl-tmp in some
-# pages, gpuhub-tmp in others -- see docs/CLOUD_GPUHUB.md's provenance note). Detect whichever
-# actually exists on THIS instance instead of trusting either string.
+# pages, gpuhub-tmp in others -- see docs/CLOUD_GPUHUB.md's provenance note). CONFIRMED LIVE on
+# this instance: it's autodl-tmp. Detect whichever actually exists rather than trusting either.
 DATA_DISK="${DATA_DISK:-}"
 if [ -z "$DATA_DISK" ]; then
   for candidate in /root/gpuhub-tmp /root/autodl-tmp; do

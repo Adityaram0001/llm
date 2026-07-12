@@ -737,4 +737,205 @@ saved image's PyTorch predates 2.7.1.
 that doesn't transfer from Ada to Blackwell (unlikely — training code only touches
 `get_device()`/`autocast_ctx()`, no architecture-specific branches).
 
-<!-- Append new decisions below. Next ID: D-029 -->
+## D-029 — gpuhub cloud pipeline validated live end-to-end on RTX 4080; 3 real setup bugs found and fixed  (2026-07-12, RW-3)
+**Decision:** `scripts/cloud/gpuhub_setup.sh` (D-027/D-028's planned artifact) was executed for
+real via SSH against a rented gpuhub RTX 4080 Super instance, not just written from docs. Result:
+full pipeline passes — see `experiments/20260712_p4_s-smoke_cloud4080/notes.md` for the
+registered run (`experiments/registry.csv`). Three real bugs surfaced only by actually running
+it, none of which the docs research (D-027's `docs/CLOUD_GPUHUB.md`) predicted, all now fixed in
+`gpuhub_setup.sh`:
+1. **conda's `python`/`pip` are not on `PATH` in a non-interactive SSH session** — no `conda
+   init` has been run on a fresh catalog image, so `remote_setup.sh`'s bare `python`/`pip` calls
+   would silently fail with "command not found." Fixed: script now exports
+   `PATH=/root/miniconda3/bin:$PATH` and persists it to `.bashrc` for later interactive/tmux use.
+2. **`rclone` is not preinstalled** on the PyTorch 2.8.0/CUDA 12.8 catalog image (only `tmux` gets
+   auto-installed, by `remote_setup.sh`'s existing apt check). Fixed: script now installs rclone
+   via the official install script if missing, matching `docker/Dockerfile`'s approach.
+3. **Data-disk mount confirmed live as `/root/autodl-tmp`** — resolves the docs'
+   self-inconsistent `autodl-tmp` vs `gpuhub-tmp` naming (`docs/CLOUD_GPUHUB.md`'s provenance
+   note) with a real answer on real hardware; the script's live-detection logic (checks both,
+   picks whichever exists) worked as designed and needed no change.
+
+**Also confirmed live, matching the docs-based research exactly:**
+`nvidia-smi` reported "CUDA Version: 13.2" (the instance-picker UI showed this too) while
+`torch.version.cuda` was actually `'12.8'` — the driver-ceiling-vs-installed-runtime gotcha the
+docs warned about, now empirically verified rather than just documented as a warning.
+
+**Measured throughput: 99,554 tok/s** on the S-tier model (9.71M params) — ~8.5x D-022's Mac MPS
+number (~11,000-11,800 tok/s), on the RTX 4080 dry-run tier, not even the target RTX 5090.
+Sample quality/loss trajectory (train_loss 9.69→5.39, val_loss 9.44→5.26) matched the original
+Mac smoke run almost exactly, confirming numerical correctness of the port, not just "it ran."
+
+**Also verified: CUDA-trained checkpoint loads on Mac MPS.** `latest.pt` (saved on the gpuhub
+CUDA instance) was `scp`'d back and loaded via `torch.load(..., map_location=get_device())` on
+the Mac — confirms `docs/CLOUD.md`'s cross-device-checkpoint portability rule works in practice,
+not just in the code's design.
+
+**Why this matters beyond the fix:** this is the same lesson as D-022/D-023 — docs/design review
+finds real issues, but only actually running the thing on the real target finds the rest.
+Neither the 33-page gpuhub docs research (D-027) nor code review would have caught the missing
+`PATH` or missing `rclone`, since neither is documented anywhere in gpuhub's docs.
+**Impacts:** `scripts/cloud/gpuhub_setup.sh` updated in place (not a new decision to revisit —
+this entry documents *why* those two blocks are in the script, since they'd look like unexplained
+defensive code otherwise). RW-3 effectively complete for the RTX-4080-validated path; only
+remaining step is repeating the CUDA-version check on an actual RTX 5090 once inventory allows,
+per D-028.
+**Revisit if:** a future gpuhub catalog image ships with `conda init` already run or `rclone`
+preinstalled — the script's guards are no-ops in that case, harmless either way.
+
+## D-030 — RTX 4080 capacity measured across tiers/seq_len; GPU-specific sweet-spot micro_batch differs from Mac's; L-tier hero run could plausibly cost ~$3-4 on this tier alone  (2026-07-12, RW-3)
+**Decision:** Ran `scripts/find_batch_size.py` (D-018) live on the gpuhub RTX 4080 Super
+instance across all three model tiers and three sequence lengths, plus an isolated
+confirmation script to rule out measurement artifacts. Full writeup with methodology and
+reasoning: `docs/learnings/20260712_gpuhub-rtx4080-capacity.md` (this entry is the terse
+decision-log version; that doc is the teaching version).
+
+**Sweet-spot tok/s (seq_len=512):** S-tier (9.71M) micro_batch=32 → 198,088 tok/s; M-tier
+(34.62M) micro_batch=32 → 72,611 tok/s; L-tier (104.80M) micro_batch=16 → 42,499 tok/s. These
+are DIFFERENT sweet-spot micro-batches than D-022's Mac-derived defaults currently sitting in
+`configs/train_s_*.yaml` (`micro_batch=16`) — D-018's own rule ("recalibrate per hardware, never
+assume") applies here: **update micro_batch to 32 before a real S-tier run on this GPU tier**,
+grad_accum re-factored to keep the same effective-batch hyperparameter.
+
+**Non-obvious finding:** throughput does NOT plateau flat past the sweet spot on this hardware —
+it *regresses* (S-tier: 198K→132K→87K tok/s at micro_batch 32→64→128, confirmed twice plus an
+isolated single-batch check with explicit cache-clearing to rule out cross-sweep memory
+fragmentation as a confound). Memory itself scales cleanly linearly (5.87→11.66→23.25GB) — it's
+specifically compute throughput that regresses past the sweet spot, a different pattern from
+D-008's Mac "cliff" (that was a sudden collapse; this is a gradual real regression, no cliff,
+until an actual OOM at micro_batch=256, ~31GB).
+
+**Seq-len scaling:** the sweet spot holds at a roughly constant ~16,384 tokens-per-forward-pass
+regardless of how that's split between batch and sequence length (512×32 ≈ 1024×16 ≈ 2048×8, all
+~192-198K tok/s) — going to a longer default context costs no real throughput on this hardware,
+it just needs a smaller micro-batch to stay at the sweet spot.
+
+**Cost projection (validated, not blind extrapolation — see reasoning below):** S-tier ablation
+run (75M tokens) ≈ 6.3 min ≈ $0.03; M-tier confirmation (1B tokens, illustrative) ≈ 3.8hr ≈
+$0.96; **L-tier hero run (2.1B tokens, D-015's Chinchilla budget) ≈ 13.7hr ≈ $3.43** — using the
+sweet-spot micro-batch, not the current Mac-tuned default. This projection is grounded, not
+speculative: the raw fwd+bwd-only benchmark at micro_batch=16 (98,757 tok/s) matched the actual
+full training run's measured throughput (99,554 tok/s, `20260712_p4_s-smoke_cloud4080`) almost
+exactly, meaning optimizer/data-loading/eval/logging overhead is negligible on this hardware, so
+the sweep numbers can be trusted as real achievable training throughput, not just idealized
+compute-only numbers.
+
+**Options considered:** trust the instance-listing spec sheet (rejected — matches this project's
+already-learned D-008 lesson that spec sheets don't predict real throughput/cliffs); measure only
+S-tier (rejected — the whole point was informing which future *tiers* of run this cheap
+instance can handle); skip the isolated-confirmation check on the throughput regression
+(rejected — a repeatable-but-unexplained regression needed at least one methodology-artifact
+check before trusting it as real).
+
+**Why this matters:** D-010 originally planned the RTX 5090 as the burst option specifically to
+fix D-008's "1.5-3 weeks on Mac" hero-run timeline problem, budgeted at "$10-20 overnight." This
+finding suggests the *cheaper* dry-run tier alone could plausibly finish the same hero run in
+under 14 hours for roughly a third of that budget — worth taking seriously as more than a
+sandbox, though a real (not synthetic-benchmark) M/L-tier validation run should happen before
+committing hours at those tiers, and the RTX 5090 plan isn't retired (a short real run there is
+still warranted once inventory allows, per D-028).
+
+**Also flagged (not fixed, not blocking):** (1) `find_batch_size.py`'s reported `mem_gb` column
+is unreliable (stayed flat across micro-batch sizes within a tier, contradicting the isolated
+check's real linear-scaling numbers) — likely reading instantaneous rather than peak CUDA memory;
+worth fixing in a future session, not urgent since the isolated check gave trustworthy numbers.
+(2) `GPT.forward()` hard-rejects sequences longer than `model_config.max_seq_len`, which will
+block phase 5 Wave B's planned RoPE-extrapolation probe (train at 512, eval at 1024/2048) until
+that guard is relaxed for eval-only forward passes — discovered incidentally while benchmarking
+seq_len scaling, not yet fixed, flagged for whoever starts Wave B.
+**Impacts:** none to code (measurement only). `configs/train_s_*.yaml` should get
+`micro_batch=32` before the next real cloud run on this GPU tier (not changed in this entry —
+that's a config edit for whenever the next real run is launched, to avoid touching settled
+configs speculatively).
+**Revisit if:** a real (non-synthetic) M/L-tier training run on this hardware shows throughput
+meaningfully different from these fwd+bwd-only sweep numbers — recalibrate the cost projection
+table above if so.
+
+## D-031 — RTX 4080 capacity matrix completed: M/L-tier seq_len scaling confirms the constant-tokens-per-step finding generalizes  (2026-07-12, RW-3)
+**Decision:** Extended D-030's S-tier-only seq_len sweep to M and L tiers (before switching to a
+rented RTX 5090 for the same measurement — this data becomes unrepeatable once the RTX 4080
+instance is stopped, and it's a few cents of GPU time). Full matrix, sweet-spot micro_batch only:
+
+| Tier | seq_len=512 | seq_len=1024 | seq_len=2048 | Sweet-spot tokens/step |
+|---|---|---|---|---|
+| S (9.71M) | mb=32 → 198,088 tok/s | mb=16 → 198,406 tok/s | mb=8 → 191,693 tok/s | 16,384 |
+| M (34.62M) | mb=32 → 72,611 tok/s | mb=16 → 70,695 tok/s | mb=8 → 72,535 tok/s | 16,384 |
+| L (104.80M) | mb=16 → 42,499 tok/s | mb=8 → 42,655 tok/s | mb=4 → 40,450 tok/s | 8,192 |
+
+**Finding confirmed, not just an S-tier coincidence:** each tier has its own fixed "sweet-spot
+tokens-per-forward-pass" constant (S and M both ~16,384; L ~8,192 — half, consistent with L's
+higher per-token compute cost saturating the GPU at a smaller batch×seq_len product). Within a
+tier, tok/s stays flat across all three sequence lengths as long as micro_batch is halved each
+time seq_len doubles. **Practical implication: a longer default context window costs ~nothing in
+total throughput on this hardware** at these model sizes — the real constraint is the
+tokens-per-step "work packet," not sequence length per se.
+**Why:** answers "what about 1024/2048" for M/L tiers specifically, and confirms (rather than
+assumes) that D-030's S-tier pattern generalizes — this project's repeated lesson (D-008, D-018,
+D-022) is that hardware behavior at one scale doesn't automatically transfer to another without
+checking.
+**Impacts:** `docs/learnings/20260712_gpuhub-rtx4080-capacity.md` updated with the full matrix.
+No config changes (measurement only, same as D-030).
+**Revisit if:** the equivalent RTX 5090 sweep (planned next, same session) shows a qualitatively
+different pattern — e.g., if the 5090's larger compute headroom makes it NOT saturate the same
+way, the "sweet-spot tokens/step is roughly hardware+tier-constant" framing would need revising
+per-GPU, not treated as a general law.
+
+## D-032 — RTX 5090 comparison sweep: strictly better than the RTX 4080 tier, not just faster — recommend defaulting to 5090 for all real runs when available  (2026-07-12, RW-3)
+**Decision:** Ran the identical 9-sweep matrix (D-030/D-031's methodology: 3 tiers × 3 seq_lens,
+`find_batch_size.py`) on a real RTX 5090 instance ($0.46/hr), triggering D-031's own "revisit if"
+condition. Result: the 4080's throughput-regression-past-sweet-spot pattern did **not** reproduce
+— 5090 sweeps mostly kept climbing to the tested ceiling (S-tier @512 hit 627,326 tok/s at
+micro_batch=128, still rising, untested beyond that) or hit a real CUDA OOM, never the gradual
+regression seen on the 4080. This confirms the 4080's regression is a quirk of that specific card
+(plausibly related to it being a modified/non-stock 32GB-VRAM part — see D-030), not a property
+of these model sizes in general.
+
+**The "sweet-spot tokens-per-step is roughly tier-constant" finding (D-031) held on the 5090
+too**, at a higher constant: S-tier ~65,536 tokens/step (4x the 4080's ~16,384) — 627,326 /
+607,058 / 569,295 tok/s at 512/1024/2048. L-tier ~16,384 tokens/step (numerically matching the
+4080's S/M constant — coincidence, not a cross-GPU law) — 127,033 / 122,598 / 114,984 tok/s.
+(M-tier's 512-seq_len sweep stopped early at the plateau-tolerance threshold with mb=64 only 0.6%
+behind mb=32 — likely an underestimate of its true ceiling, unlike the cleaner S/L data.)
+
+**Head-to-head cost comparison (sweet-spot tok/s, seq_len=512):**
+
+| Task | 4080 ($0.25/hr) | 5090 ($0.46/hr) | Speedup | Cheaper by |
+|---|---|---|---|---|
+| S-tier ablation (75M tok) | 0.11hr / $0.03 | 0.03hr / $0.02 | 3.17x | $0.01 |
+| M-tier (1B tok, illustrative) | 3.83hr / $0.96 | 1.28hr / $0.59 | 2.98x | $0.37 |
+| L-tier hero run (2.1B tok, D-015) | 13.73hr / $3.43 | 4.59hr / $2.11 | 2.99x | $1.32 |
+
+**The 5090 is strictly better across every tier tested** — despite costing 84% more per hour, it's
+~3x faster, making it BOTH faster and cheaper per completed run. This isn't a "pay more for
+speed" tradeoff; it's a genuine free lunch at these model sizes. **Recommendation: default to
+RTX 5090 whenever gpuhub has inventory; treat the RTX 4080 tier as a near-free dry-run/debugging
+sandbox only** (a smoke test costs about a penny on either GPU, so the 4080's lower hourly rate
+doesn't matter for that use case — it matters for real runs, where the 5090 wins outright).
+
+**Options considered:** keep favoring the cheap 4080 tier per D-030's initial framing (rejected —
+that framing was written before a real 5090 comparison existed, explicitly flagged as
+provisional pending this exact measurement); split by tier (e.g. 4080 for S-tier ablations, 5090
+for M/L) — rejected, the 5090 wins even at S-tier, no tier favors the 4080 once you account for
+$/run rather than $/hr.
+
+**Also: a process bug found while setting up this comparison, unrelated to either GPU.** Setting
+up the 5090 instance via the `curl`-from-GitHub one-liner (`docs/CLOUD_GPUHUB.md` §11) reproduced
+D-029's exact "python/pip not on PATH" bug — because D-029's fix to `scripts/cloud/gpuhub_setup.sh`
+was made locally and never committed/pushed, so the GitHub-hosted copy the curl one-liner fetches
+was still the broken version. Worked around by `scp`-ing the local fixed copy directly (same
+method as the very first setup). **Lesson: an uncommitted fix to a script designed to be
+fetched by URL isn't actually fixed for that workflow** — logged here rather than silently
+patched, per this project's habit of recording process lessons alongside technical ones (see
+D-022's/D-023's precedent). The fix itself still hasn't been pushed as of this entry — that's a
+user call (git commits are user-initiated per CLAUDE.md), flagged for the session wrap-up.
+**Impacts:** `docs/learnings/20260712_gpuhub-rtx4080-capacity.md` extended with the full
+comparison (title updated to reflect both GPUs). `docs/CLOUD_GPUHUB.md` §10 updated to recommend
+the 5090 by default. No training config changes yet (measurement only — real configs should be
+updated with the measured sweet-spot micro_batch immediately before whichever GPU tier is
+actually used for the next real run, per D-018).
+**Revisit if:** gpuhub's 5090 inventory/pricing changes materially, or a real (non-synthetic)
+training run on the 5090 shows throughput meaningfully different from these fwd+bwd-only sweep
+numbers (same caveat as D-030 — only S-tier has a real-training calibration point so far, from
+the 4080; worth a real 5090 smoke-test run before fully trusting the M/L projections).
+
+<!-- Append new decisions below. Next ID: D-033 -->

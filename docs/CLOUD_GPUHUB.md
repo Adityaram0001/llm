@@ -169,6 +169,15 @@ platform is "rent one instance with more GPUs," not "network several instances."
 
 ## Decision: RESOLVED (D-027, 2026-07-12) — this is now the live playbook
 
+**Update 2026-07-12: validated live end-to-end on a real RTX 4080 Super instance (D-029).**
+Confirmed on real hardware (not just docs): data-disk mount is `/root/autodl-tmp`; `nvidia-smi`
+showed "CUDA Version: 13.2" while the actual installed/used runtime was `12.8` (driver-ceiling-
+vs-installed gotcha, exactly as the docs warned); conda's `python`/`pip` are NOT on `PATH` in a
+non-interactive SSH session (no `conda init` run on a fresh image); `rclone` is NOT preinstalled.
+All fixed in `scripts/cloud/gpuhub_setup.sh`. Measured throughput: 99,554 tok/s on the S-tier
+model — ~8.5x the Mac's MPS number, on the cheap dry-run tier. Full run: `experiments/
+20260712_p4_s-smoke_cloud4080/notes.md`.
+
 gpuhub is the active provider (~50% cheaper than RunPod at the same hardware tier — user's
 quoted pricing: RTX 5090 $0.46/hr vs $0.99/hr; RTX PRO 6000 $0.91/hr vs $1.99/hr). **Option (a):**
 fully adapt to gpuhub's native flow — base catalog image → live setup script → Save Image →
@@ -179,12 +188,34 @@ step-by-step manual once the pipeline is verified end-to-end on gpuhub's servers
 
 ## 10. GPU tier pick
 
-**RTX 5090** is the default pick (matches D-018's reasoning: our ~10-105M-param models are
-nowhere near VRAM-bound, so RTX PRO 6000's extra VRAM at ~2x the price buys nothing). At gpuhub's
-pricing this is $0.46/hr — a 1500-step S-tier-equivalent run is minutes; an L-tier hero run
-(~2.1B tokens) will need real hour-budget math once we've measured actual gpuhub 5090 tok/s
-(don't assume RunPod/Mac numbers port over — D-018's "measure, don't assume, on new hardware"
-rule applies here too).
+**Default to RTX 5090 ($0.46/hr) for all real runs — it's strictly better, not just faster
+(D-032).** A full head-to-head comparison against the RTX 4080 dry-run tier ($0.25/hr) found the
+5090 ~3x faster at every tier tested, making it BOTH faster AND cheaper per completed run despite
+costing 84% more per hour — a genuine free lunch at these model sizes, not a speed/cost tradeoff.
+Full methodology, reasoning, and the interesting hardware-behavior differences between the two
+GPUs: `docs/learnings/20260712_gpuhub-rtx4080-capacity.md`. RTX PRO 6000 remains not worth it
+(D-018/D-032: same Blackwell generation as the 5090, ~2x the price, and our models are nowhere
+near VRAM-bound).
+
+**Sweet-spot throughput, seq_len=512 (set `batch.micro_batch` to these before a real run —
+DIFFERENT per GPU, and different from the Mac-tuned D-022 defaults still in
+`configs/train_s_*.yaml`):**
+
+| Tier | RTX 4080 sweet spot | RTX 5090 sweet spot |
+|---|---|---|
+| S (9.71M) | mb=32 → 198,088 tok/s | mb=128 → 627,326 tok/s (still climbing, untested beyond) |
+| M (34.62M) | mb=32 → 72,611 tok/s | mb=32 → 216,199 tok/s (likely underestimated, see learnings doc) |
+| L (104.80M) | mb=16 → 42,499 tok/s | mb=32 → 127,033 tok/s |
+
+**Cost per real run, head-to-head:** S-tier ablation (75M tok) $0.03→$0.02; M-tier (1B tok)
+$0.96→$0.59; **L-tier hero run (2.1B tok, D-015) $3.43→$2.11, 13.7hr→4.6hr.** Treat the RTX 4080
+tier as a near-free dry-run/debugging sandbox going forward (smoke tests cost about a penny on
+either GPU) — reach for the 5090 whenever inventory allows and the run is real, not exploratory.
+
+The projection is grounded in a real calibration match for S-tier (raw benchmark ≈ actual
+training throughput on the 4080, see D-030) but M/L tiers are still synthetic-benchmark-only on
+both GPUs — a short real training run at M/L tier is worth doing before committing many hours,
+per D-018's own rule.
 
 **Recommended sequencing to minimize billed debugging time** (per `docs/CLOUD.md`'s golden rule
 — GPU time is for training only):
