@@ -1,5 +1,11 @@
 # CLOUD — renting an NVIDIA GPU for big runs (RunPod / gpuhub, RTX 5090)
 
+> **⚠ gpuhub-specific conflict, unresolved:** this doc's Docker fast-start section (D-017)
+> assumes a Docker-Hub-pull workflow. Research (2026-07-12, `docs/CLOUD_GPUHUB.md`) found gpuhub
+> **does not support pulling images from any third-party registry** — the workflow needs an
+> explicit provider decision before renting on gpuhub. See `docs/CLOUD_GPUHUB.md` §1 and its
+> "Open decision" section. RunPod's flow (as written below) is unaffected.
+
 The Mac (M4/MPS) is the primary lab: all development, notebooks, S-tier ablations. A rented
 RTX 5090 is the **burst option** for M/L-tier and the phase-9 hero run (see D-010: a run that
 needs ~2–3 weeks on the Mac finishes overnight on a 5090 for roughly $10–20). This doc is the
@@ -22,8 +28,9 @@ CUDA + PyTorch preinstalled. You get SSH access as root. Its disk is (mostly) ep
    `ssh-keygen -t ed25519 -C "adityaram-llmlab"` — add the **public** key in the provider's
    web console (RunPod: Settings → SSH Public Keys). Never copy the private key anywhere.
 2. Create account, add ~$10–25 credit. RunPod is the recommended first provider (per-second
-   billing, big community-image library, good docs); gpuhub is fine too — the workflow below
-   is provider-agnostic, only the console clicks differ.
+   billing, big community-image library, good docs); gpuhub is an alternative but its Docker
+   image handling differs enough to need its own workflow — see `docs/CLOUD_GPUHUB.md` before
+   picking gpuhub specifically.
 3. wandb: for cloud runs flip to **online** mode (`WANDB_MODE=online`, `wandb login` on the
    pod with your API key from wandb.ai/authorize) — live monitoring from the Mac's browser is
    exactly what you want during a paid run. (Local D-009 offline default is unchanged.)

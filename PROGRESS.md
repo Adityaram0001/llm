@@ -170,7 +170,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 | ID | What | Why | Fix in phase | Status |
 |----|------|-----|--------------|--------|
 | RW-1 | Tokenize TinyStories supplement + a FineWeb-Edu sample with hf_bpe_16k → `data/tokenized/hf_bpe_16k/supplement_*.bin`. **Fully done 2026-07-12**: tokenized (D-019, D-020: 520.5M + 992.8M tokens) AND pushed to R2 (D-026) — `r2:llm/data/tokenized/` now has all 16 files (train/val, both supplements + docstarts, meta.json, all 3 tokenizer vocabs), 2.879 GiB, verified via `rclone lsf -R` | D-015: L-tier is 105M, needs ~2.1B tokens; repetition alone (~4 epochs of core+TinyStories) was right at the edge, so a FineWeb-Edu sample was added for margin + topic diversity | 4 | done |
-| RW-3 | One-time cloud accounts setup with the user: push repo to GitHub (private is fine), Docker Hub account, build+push `docker/Dockerfile` (buildx, linux/amd64), Cloudflare R2 bucket + rclone remote on Mac, provider pod template with env vars. **R2 sub-step fully done 2026-07-12** (D-026): bucket `llm` created, rclone installed (`~/bin/rclone`, not Homebrew — broken on this macOS version), `.env` wired with real credentials, tokenized data pushed and verified. **Remaining:** GitHub remote, Docker Hub account + image build/push, provider pod template — none started yet | D-017: Docker fast-start + bucket data logistics chosen for billed-time efficiency | 4 (any time before first cloud run; ~30 min, all free tiers) | in-progress |
+| RW-3 | One-time cloud accounts setup. **Done:** GitHub remote (confirmed 2026-07-12, was stale "not started" text before), R2 bucket + rclone (D-026), Docker Desktop installed locally (2026-07-12), $10 gpuhub credit purchased (2026-07-12). **Provider decision made (D-027, 2026-07-12): gpuhub is the active provider** (RTX 5090 $0.46/hr vs RunPod's $0.99/hr — ~50% cheaper), using gpuhub's **native** workflow (option a: base catalog image → live setup script → "Save Image" snapshot), NOT Docker Hub — gpuhub can't pull third-party registry images. RunPod's Docker-Hub plan (`docs/CLOUD.md`) stays fully documented but is not being built right now, per user instruction. **Remaining before first cloud run:** write/test `scripts/cloud/gpuhub_setup.sh` (gpuhub-native equivalent of `docker/entrypoint.sh`), do a cheap dry run (gpuhub's $0.10/hr no-GPU prep mode first, then a short RTX 5090 session) to verify SSH/paths/rclone pull/CUDA, then Save Image. Live playbook: `docs/CLOUD_GPUHUB.md`. | D-017 (superseded for the active path by D-027): Docker fast-start + bucket data logistics chosen for billed-time efficiency | 4 (any time before first cloud run) | in-progress |
 | RW-4 | Domain corpus expansion (finance/self-help/wisdom): user picks PD-only books (Gutenberg-era finance/self-help classics — modern bestsellers are copyrighted), optionally + finance-filtered FineWeb-Edu slice; loader gets per-source mixing weights so domain share of the TRAINING STREAM (not disk) is explicit; keep domain repetition ≤~4 epochs. User's target: 10–20% (recommendation 15–25%); final % is the user's call when phase 4 builds the loader. Also: finance/wisdom probes in phase 6, domain-mix ablation in P5-G (specs updated) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 4 (loader + corpus) / 6 (probes) / 5-G (ablation) | todo |
 
 ## Parking lot (future ideas, deliberately not scheduled)
@@ -205,12 +205,18 @@ from the phase-2 tokenizer study (`20260710_p2_tokenizer-*`) are also in the reg
   reference for how the loader/trainer behave. **First check the "OVERNIGHT PIPELINE" note
   above** — `p4_s_baseline` and `p4_s_lr_sweep` may already be finished, in progress, or need a
   `--resume`/re-launch depending on when this is read.
-- RW-3 (one-time cloud accounts: GitHub remote, Docker Hub + image build, R2 bucket + rclone,
-  pod template) is user-facing setup — still not started (rclone isn't installed). Not a
-  blocker for S-tier engine work; walk it interactively before the first M-tier run, and as
-  RW-1's last remaining step (`scripts/cloud/data_push.sh` push of the now-tokenized
-  supplement bins). Cloud flow after that: `docs/CLOUD.md` "Docker fast-start" (billed cold
-  start ≈ 2–4 min; big files move only via bucket, never rsync).
+- RW-3 status as of 2026-07-12 (this bullet supersedes older "rclone isn't installed" text):
+  GitHub remote done, R2/rclone done (D-026). **Still open:** Docker Hub account + image
+  build/push (Docker Desktop not installed locally), provider pod template. **Provider choice
+  itself is now an open question**, not just an execution gap: the user is evaluating **gpuhub**
+  as a provider; a full docs read this session (`docs/CLOUD_GPUHUB.md`) found gpuhub cannot pull
+  Docker Hub images at all (conflicts with D-017's assumption, which was written RunPod-first).
+  Read `docs/CLOUD_GPUHUB.md` before doing anything else on RW-3's Docker sub-step — it has the
+  gpuhub-native alternative workflow (base image → setup script → Save Image) and an explicit
+  "Open decision" the user needs to make (adapt to gpuhub / stay on RunPod / support both).
+  RTX 5090 pricing/availability on gpuhub is also still unconfirmed (not in any of the 33 pages
+  fetched) — get that page before budgeting hours. Not a blocker for S-tier engine work either
+  way; walk it interactively before the first M-tier cloud run.
 - RW-4 (domain corpus expansion — finance/self-help/wisdom books) still needs the user to pick
   PD-only titles; not blocking the training-engine build, but the loader's mixing-weight design
   (previous bullet) should keep RW-4 in mind so it's not a rewrite later.

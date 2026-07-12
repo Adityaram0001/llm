@@ -677,4 +677,64 @@ files — train/val, both supplements + docstarts, meta.json, all 3 tokenizer vo
 in `r2:llm/data/tokenized/`, verified via `rclone lsf -R`. RW-1 and this R2 sub-step of RW-3 are
 both fully done.
 
-<!-- Append new decisions below. Next ID: D-027 -->
+## D-027 — Cloud provider: gpuhub chosen over RunPod (~2x cheaper), native image-snapshot workflow, RunPod kept as documented-but-unbuilt fallback  (2026-07-12, RW-3)
+**Decision:** **gpuhub** is the active cloud provider for burst training (RTX 5090 tier for
+M/L-tier confirmations and the phase-9 hero run, per D-010's hybrid-compute strategy — that
+strategy itself is unchanged, only the provider choice within it). User's own quoted pricing:
+RTX 5090 **$0.46/hr on gpuhub vs $0.99/hr on RunPod**; RTX PRO 6000 **$0.91/hr vs $1.99/hr** —
+gpuhub is ~50% cheaper on both tiers checked, same hardware class either way. User purchased $10
+gpuhub credit and installed Docker Desktop locally this session.
+
+**Docker workflow — option (a) from `docs/CLOUD_GPUHUB.md`'s "Open decision":** fully adapt to
+gpuhub's native flow (rent from their pre-built PyTorch/CUDA catalog → run setup script live over
+SSH → "Save Image" snapshots the configured disk for reuse), NOT the Docker-Hub-push flow gpuhub
+doesn't support (see D-017/`docs/CLOUD_GPUHUB.md` §1 for why: gpuhub refuses to pull images from
+any third-party registry). `docker/Dockerfile`'s `RUN` lines remain the source of truth for
+*what* needs installing — a new gpuhub-native setup script (`scripts/cloud/gpuhub_setup.sh`)
+translates them into shell commands run on the live instance instead of `docker build` steps.
+
+**Options considered:** (a) gpuhub-native, build once now — chosen; (b) stay RunPod-only,
+keep the existing Docker-Hub plan as the *only* plan — rejected, costs 2x forever for the same
+hardware; (c) build both providers' flows now in parallel — rejected as premature effort before
+a single successful cloud run has happened on either.
+**Why:** Pure cost at fixed hardware quality; the one-time cost of learning gpuhub's flow
+(this session's research + first dry run) is paid once and amortized over every future rental.
+**Impacts:** RW-3's Docker Hub sub-step is superseded for the *active* path — no image gets
+built/pushed against gpuhub right now. `docs/CLOUD.md` (RunPod/Docker-Hub flow) is kept fully
+intact and unmodified as a documented fallback, explicitly not worked on further right now per
+the user's instruction. `docs/CLOUD_GPUHUB.md` is the live, actively-maintained playbook going
+forward — its "Open decision" section is now resolved by this entry. PROGRESS.md's RW-3 row
+updated accordingly.
+**Revisit if:** gpuhub pricing/availability changes materially, gpuhub's Save-Image/native flow
+proves unworkable in practice once actually exercised (fall back to RunPod's already-documented
+Docker Hub flow, which needs no rework since it was never abandoned, just deprioritized), or a
+future phase needs a provider feature gpuhub lacks (e.g. genuine multi-node distributed training,
+which gpuhub doesn't support on non-A100 cards per the research).
+
+## D-028 — First gpuhub dry run on RTX 4080 Super (Ada/sm_89), not RTX 5090 directly  (2026-07-12, RW-3)
+**Decision:** Validate the whole gpuhub pipeline (SSH, `gpuhub_setup.sh`, R2 data pull, deps
+install, a training smoke run, Save Image) on gpuhub's **RTX 4080 Super** tier ($0.25/hr) before
+touching the target RTX 5090. Immediate trigger: RTX 5090 had zero inventory available at rental
+time; RTX PRO 6000 was available but offered no compatibility advantage (same Blackwell/sm_120
+family, same CUDA≥12.8/PyTorch≥2.7.1 requirement) at ~4x the price.
+**Options considered:** RTX 5090 (unavailable) / RTX PRO 6000 ($0.91/hr, Blackwell, available but
+pricier with no upside for this purpose) / **RTX 4080 Super ($0.25/hr, chosen)** — Ada Lovelace
+(sm_89), a long-established architecture with no CUDA≥12.8/PyTorch-nightly wrinkles.
+**Why:** cheapest available option AND removes a variable — Blackwell's strict version
+requirements (flagged in `docs/CLOUD_GPUHUB.md` §2) are exactly the kind of thing you don't want
+to be debugging at the same time as "does SSH/rclone/git-clone even work on this platform."
+Validate the pipeline on boring, well-supported hardware first; the eventual 5090 rental then
+only needs to re-verify the CUDA-version/driver side (`ldconfig -p | grep cuda`, not `nvidia-smi`
+— the instance listing's displayed "CUDA: 13.2" is presumed to be the driver's max-supported
+version per that same gotcha, not the installed toolkit version; confirm once SSH'd in).
+**Impacts:** none to the training code (already fully device-agnostic per CLOUD.md's portability
+rules) — this only affects which instance `scripts/cloud/gpuhub_setup.sh` gets exercised on
+first. A saved image built on the 4080 instance should still be usable as a starting point for a
+future 5090 rental (Save Image snapshots the system disk, not GPU-specific state), though the
+Blackwell CUDA/PyTorch requirement may still need a nightly-PyTorch bump at that point if the
+saved image's PyTorch predates 2.7.1.
+**Revisit if:** something in the pipeline turns out to be GPU-architecture-sensitive in a way
+that doesn't transfer from Ada to Blackwell (unlikely — training code only touches
+`get_device()`/`autocast_ctx()`, no architecture-specific branches).
+
+<!-- Append new decisions below. Next ID: D-029 -->
