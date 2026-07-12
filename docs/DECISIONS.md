@@ -639,4 +639,42 @@ way. `notebooks/05_compare_runs.ipynb` renders all of the above cleanly.
 margins were within seed noise after all -- unlikely given the consistency across every
 checkpoint, but that's exactly what the noise-floor protocol (`docs/EXPERIMENTS.md`) is for.
 
-<!-- Append new decisions below. Next ID: D-026 -->
+## D-026 — R2 credentials via `.env` + env-var rclone remote (no config file); rclone installed from official zip, not Homebrew  (2026-07-12, phase 4 / RW-3)
+**Decision:** User created the Cloudflare R2 bucket (`llmlab`) this session, prompting the first
+real step of RW-3. Two sub-decisions:
+1. **Credentials live in a root `.env`** (gitignored — repo is public), not in
+   `~/.config/rclone/rclone.conf` via the interactive `rclone config` wizard. The five
+   `RCLONE_CONFIG_R2_*` env vars (`TYPE`, `PROVIDER`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`,
+   `ENDPOINT`) configure rclone's `r2:` remote directly — this is the *same* mechanism
+   `docker/entrypoint.sh` already used for the pod template, so local Mac and cloud pod now
+   share one credential format instead of two. `.env.example` (committed) documents where to
+   get each value; `scripts/cloud/data_push.sh` sources `.env` automatically if present.
+2. **rclone installed from the official release zip** (`downloads.rclone.org/rclone-current-osx-arm64.zip`
+   → `~/bin/rclone`, `~/bin` added to `PATH` in `.zshrc`), not `brew install rclone` — Homebrew
+   on this machine is currently broken (`/opt/homebrew` ownership issue *and* a Ruby version-check
+   crash on macOS 26.5.2, which Homebrew doesn't yet recognize). Did not run `sudo chown` to fix
+   Homebrew, since that's a system-wide permissions change outside this session's scope — flagging
+   here in case the user wants to fix Homebrew properly later; the zip install is a full
+   substitute for our purposes (single static binary, no other deps needed).
+
+**Why:** the user asked specifically for credentials in `.env` (not Homebrew's config file) and
+for the file to be excluded from git since the repo is public. Reusing the pod template's
+existing `RCLONE_CONFIG_R2_*` var names (already documented in `docker/entrypoint.sh` for
+Docker fast-start) avoids inventing a second credential format.
+
+**Impacts:** `docs/CLOUD.md` step 4 rewritten to match; `.gitignore` gained `.env`;
+`scripts/cloud/data_push.sh` now sources `.env`. RW-1's last remaining step (push tokenized bins
+to R2) is now complete — see below.
+**Revisit if:** Homebrew gets fixed later (e.g. a Homebrew release adds support for this macOS
+version) — fine to switch to `brew install rclone` then, no functional difference either way.
+
+**Follow-up same day:** the bucket is actually named `llm` (not `llmlab` as first assumed/written
+into docs/scripts) — the mismatch caused an initial `403 AccessDenied` from R2 (misread as a
+credentials problem; it was a wrong bucket name in the `r2:llmlab` path, not a permissions issue
+in the token). Corrected in `.env`, `.env.example`, `docs/CLOUD.md`, and `docker/entrypoint.sh`'s
+comment. `scripts/cloud/data_push.sh` then ran successfully: `data/tokenized/` (2.879 GiB, 16
+files — train/val, both supplements + docstarts, meta.json, all 3 tokenizer vocab sets) is now
+in `r2:llm/data/tokenized/`, verified via `rclone lsf -R`. RW-1 and this R2 sub-step of RW-3 are
+both fully done.
+
+<!-- Append new decisions below. Next ID: D-027 -->

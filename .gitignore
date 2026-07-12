@@ -16,3 +16,6 @@ tools/data_factory/inbox/
 tools/data_factory/outbox/
 additionals/
 scripts/cloud/remote.env
+
+# secrets — R2/cloud credentials, never committed (repo is public)
+.env

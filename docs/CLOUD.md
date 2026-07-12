@@ -27,10 +27,14 @@ CUDA + PyTorch preinstalled. You get SSH access as root. Its disk is (mostly) ep
 3. wandb: for cloud runs flip to **online** mode (`WANDB_MODE=online`, `wandb login` on the
    pod with your API key from wandb.ai/authorize) — live monitoring from the Mac's browser is
    exactly what you want during a paid run. (Local D-009 offline default is unchanged.)
-4. **Data bucket** (D-017): create a Cloudflare R2 bucket `llmlab` (free tier: 10GB storage,
-   **zero egress fees** — that's why R2 over S3) + an API token. On the Mac:
-   `brew install rclone`, then `rclone config` → new remote `r2`, type `s3`, provider
-   `Cloudflare`, paste key/secret/endpoint. Test: `rclone lsd r2:`.
+4. **Data bucket** (D-017, D-026): create a Cloudflare R2 bucket (this project's is named `llm`
+   — free tier: 10GB storage, **zero egress fees**, that's why R2 over S3) + a scoped API token
+   (Object Read & Write on that bucket only). rclone is at `~/bin/rclone` (installed from the official
+   release zip, not Homebrew — see D-026). Copy `.env.example` → `.env` (gitignored, repo is
+   public) and fill in the five `RCLONE_CONFIG_R2_*` values from the Cloudflare dashboard — this
+   configures the `r2:` remote via env vars, no `rclone config` wizard/config file needed, and
+   the same var names double as the pod-template env vars below. Test:
+   `set -a && source .env && set +a && rclone lsd r2:`.
 5. **Docker image** (D-017): `docker buildx build --platform linux/amd64 -f docker/Dockerfile
    -t docker.io/<you>/llmlab:0.1 --push .` (needs Docker Desktop + a free Docker Hub account).
    Rebuild only when `requirements.txt` changes. The `--platform linux/amd64` flag is
@@ -44,7 +48,7 @@ boots with everything preinstalled and *pulls code + data itself*:
 
 1. In the provider console, create a **pod template** pointing at `docker.io/<you>/llmlab:0.1`
    with env vars: `GIT_REPO_URL` (this repo — push it to GitHub first), `GIT_BRANCH`,
-   `DATA_REMOTE=r2:llmlab/data/tokenized/hf_bpe_16k`, `WANDB_API_KEY`, and the five
+   `DATA_REMOTE=r2:llm/data/tokenized/hf_bpe_16k`, `WANDB_API_KEY`, and the five
    `RCLONE_CONFIG_R2_*` vars (see `docker/entrypoint.sh` header). Secrets live in the
    template, never in the repo.
 2. Rent pod from the template → SSH in → `llmlab-entrypoint bash` (or it already ran as init)
@@ -63,7 +67,7 @@ The rsync flow below remains the fallback (first-ever rental, or no GitHub/Docke
 | Deps | Docker image | `docker pull` by provider | change rarely; pinned = reproducible |
 | Tokenized data (`.bin` + tokenizer + meta) | **R2 bucket** (uploaded once via `scripts/cloud/data_push.sh`) | `rclone copy` on pod (entrypoint does it) | ~5GB at hero scale: from the Mac's home upload that's 20–45 min of billed pod time per rental; from R2 it's <1 min, and R2 egress is free |
 | Raw text corpus | Mac only (+ rebuildable via `build_corpus.py`) | never shipped | pods only need tokens |
-| Checkpoints/metrics during a run | pod disk → synced out | `sync_down.sh` to Mac, and/or `rclone copy experiments/ r2:llmlab/experiments/` from the pod (belt-and-braces for multi-day runs) | pod disk dies with the pod |
+| Checkpoints/metrics during a run | pod disk → synced out | `sync_down.sh` to Mac, and/or `rclone copy experiments/ r2:llm/experiments/` from the pod (belt-and-braces for multi-day runs) | pod disk dies with the pod |
 | **Never in the image:** data, checkpoints, secrets | | | image = tools, not state |
 
 Rule of thumb: **anything ≥1GB moves Mac↔pod only via the bucket**, not rsync — home upload

@@ -60,11 +60,12 @@ samples read as English-ish ✅ (Socratic-dialogue prose by step 800); resume ve
 bit-exact); comparison notebook renders ✅ (re-run for fresh plots, not required for the
 criterion itself). **Milestone M1 can be declared.**
 
-**Still open from before this session (unaffected by this work):** RW-1's last step (pushing
-tokenized supplement bins to the R2 bucket) remains blocked on RW-3 (cloud accounts: rclone/
-remote not set up) — still not needed for any S-tier work. RW-4 (domain corpus expansion) still
-needs the user to pick titles; the loader's per-source mixing-weight design (`MixedSourceLoader`)
-was built general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happens.
+**Update 2026-07-12 (later same day):** RW-1 is now fully done — R2 bucket `llm` created by the
+user, rclone installed + `.env` wired (D-026), tokenized data pushed and verified (2.879 GiB,
+16 files). RW-3's other sub-steps (GitHub remote, Docker Hub, pod template) remain open, still
+not needed for any S-tier work. RW-4 (domain corpus expansion) still needs the user to pick
+titles; the loader's per-source mixing-weight design (`MixedSourceLoader`) was built
+general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happens.
 
 ## Phase status
 
@@ -168,8 +169,8 @@ was built general-purpose with RW-4 in mind, so it shouldn't need a rewrite when
 
 | ID | What | Why | Fix in phase | Status |
 |----|------|-----|--------------|--------|
-| RW-1 | Tokenize TinyStories supplement + a FineWeb-Edu sample with hf_bpe_16k → `data/tokenized/hf_bpe_16k/supplement_*.bin`. **Done 2026-07-11** (D-019, D-020): both supplements tokenized and verified (520.5M + 992.8M tokens). Only the final step — `scripts/cloud/data_push.sh` to the R2 bucket — remains, blocked on RW-3 (rclone/remote not set up) | D-015: L-tier is 105M, needs ~2.1B tokens; repetition alone (~4 epochs of core+TinyStories) was right at the edge, so a FineWeb-Edu sample was added for margin + topic diversity | 4 (R2 push before first M-tier run) | in-progress |
-| RW-3 | One-time cloud accounts setup with the user: push repo to GitHub (private is fine), Docker Hub account, build+push `docker/Dockerfile` (buildx, linux/amd64), Cloudflare R2 bucket `llmlab` + rclone remote on Mac, provider pod template with env vars | D-017: Docker fast-start + bucket data logistics chosen for billed-time efficiency | 4 (any time before first cloud run; ~30 min, all free tiers) | todo |
+| RW-1 | Tokenize TinyStories supplement + a FineWeb-Edu sample with hf_bpe_16k → `data/tokenized/hf_bpe_16k/supplement_*.bin`. **Fully done 2026-07-12**: tokenized (D-019, D-020: 520.5M + 992.8M tokens) AND pushed to R2 (D-026) — `r2:llm/data/tokenized/` now has all 16 files (train/val, both supplements + docstarts, meta.json, all 3 tokenizer vocabs), 2.879 GiB, verified via `rclone lsf -R` | D-015: L-tier is 105M, needs ~2.1B tokens; repetition alone (~4 epochs of core+TinyStories) was right at the edge, so a FineWeb-Edu sample was added for margin + topic diversity | 4 | done |
+| RW-3 | One-time cloud accounts setup with the user: push repo to GitHub (private is fine), Docker Hub account, build+push `docker/Dockerfile` (buildx, linux/amd64), Cloudflare R2 bucket + rclone remote on Mac, provider pod template with env vars. **R2 sub-step fully done 2026-07-12** (D-026): bucket `llm` created, rclone installed (`~/bin/rclone`, not Homebrew — broken on this macOS version), `.env` wired with real credentials, tokenized data pushed and verified. **Remaining:** GitHub remote, Docker Hub account + image build/push, provider pod template — none started yet | D-017: Docker fast-start + bucket data logistics chosen for billed-time efficiency | 4 (any time before first cloud run; ~30 min, all free tiers) | in-progress |
 | RW-4 | Domain corpus expansion (finance/self-help/wisdom): user picks PD-only books (Gutenberg-era finance/self-help classics — modern bestsellers are copyrighted), optionally + finance-filtered FineWeb-Edu slice; loader gets per-source mixing weights so domain share of the TRAINING STREAM (not disk) is explicit; keep domain repetition ≤~4 epochs. User's target: 10–20% (recommendation 15–25%); final % is the user's call when phase 4 builds the loader. Also: finance/wisdom probes in phase 6, domain-mix ablation in P5-G (specs updated) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 4 (loader + corpus) / 6 (probes) / 5-G (ablation) | todo |
 
 ## Parking lot (future ideas, deliberately not scheduled)

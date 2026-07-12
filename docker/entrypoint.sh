@@ -5,7 +5,7 @@
 #
 #   GIT_REPO_URL   e.g. https://github.com/<user>/llm-lab.git  (public or with token in URL)
 #   GIT_BRANCH     default: main
-#   DATA_REMOTE    rclone path of the data bucket, e.g. r2:llmlab/data/tokenized/hf_bpe_16k
+#   DATA_REMOTE    rclone path of the data bucket, e.g. r2:llm/data/tokenized/hf_bpe_16k
 #   WANDB_API_KEY  picked up automatically by wandb
 #   RCLONE_CONFIG_R2_* env vars configure the "r2:" remote without a config file:
 #     RCLONE_CONFIG_R2_TYPE=s3  RCLONE_CONFIG_R2_PROVIDER=Cloudflare
