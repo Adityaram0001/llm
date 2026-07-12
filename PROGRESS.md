@@ -4,19 +4,34 @@
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
 **Active phase:** Phase 4 is **done** (milestone M1 declared). Phase 5
-(`docs/phases/phase5_ablations.md`) is **in-progress**: the mandatory seed-noise study is done
-(D-035, noise floor = 0.015 spread) — Wave A (norms & activations) is next, not yet started.
+(`docs/phases/phase5_ablations.md`) is **in-progress**: seed-noise study done (D-035), **Wave A
+done (D-036)**, **Wave B done (D-037)**. **Wave C (attention variants: MHA/MQA/GQA/MLA) is
+next** — the spec flags MLA as "the hardest implementation of the project," needing a full
+session (DeepSeek-V2 §2 KV low-rank compression + decoupled RoPE keys, plus
+`notebooks/06_mla_explained.ipynb`'s matrix diagrams). Start Wave C fresh, don't try to squeeze
+it into a session that's already done other work.
 **Last session:** 2026-07-11 evening through 2026-07-12 — built the whole training engine
 (deliverables 0b, 1, 2, 3, 3b), ran the first real experiments including an unattended overnight
 lr-sweep + baseline pipeline, then reviewed the results.
 **Same-day update (2026-07-12, phase 5 start):** ran the phase-5 seed-noise study (2 more seeds
-on top of the existing baseline) on the still-running RTX 5090 gpuhub instance (left up since the
-D-034 benchmark session) — see D-035. Noise floor: mean val_loss 3.5043, std 0.0062, spread
-0.0150 across seeds 1337/1338/1339. This is also the first real (non-sweep) confirmation that a
-full training loop runs correctly on gpuhub's CUDA hardware (~126K tok/s, ~13min/run vs Mac's
-2.4hr). **Wave A's model code needs zero new implementation** — `norm`/`norm_position`/`ffn`/
-`qk_norm` are all already wired in `src/llmlab/model/{norms,block,ffn,attention}.py` per phase 3;
-Wave A is purely 4 configs + 4 runs + analysis.
+on top of the existing baseline), then Wave A (4 runs) and Wave B (4 runs + length-extrapolation
+probe), all on the RTX 5090 gpuhub instance (left up since the D-034 benchmark session — **user
+confirmed shutting it down at session end, it is NOT running as of this update**, re-provision
+from the saved "genesis" image next time, per D-029/CLOUD_GPUHUB.md). Noise floor: mean val_loss
+3.5043, std 0.0062, **spread 0.0150** across seeds 1337/1338/1339 (D-035) — this is also the
+first real (non-sweep) confirmation that a full training loop runs correctly on gpuhub's CUDA
+hardware (~126K tok/s, ~13min/run vs Mac's 2.4hr). **Wave A (D-036):** RMSNorm≈LayerNorm
+(borderline), pre-norm≫post-norm (post-norm stagnates, doesn't blow up), SwiGLU beats GELU
+(param-matched, real), **+QK-norm is a real, robust win** (best of the wave, recommend as new
+default). **Wave B (D-037):** required a real code fix first — RW-5's `GPT.forward()` guard now
+only blocks learned/sinusoidal past `max_seq_len`, not rope/alibi/none (new
+`scripts/eval_extrapolation.py` for any future length-probe work). Results: learned/sinusoidal/
+NoPE all real-worse than RoPE at trained length; **ALiBi real-better than RoPE AND the
+length-extrapolation probe is the project's cleanest paper reproduction yet** — ALiBi's val_loss
+*improves* with more context (ppl 32.56→31.67 @ 512→2048) while RoPE degrades gracefully
+(33.24→45.68) and NoPE collapses (40→732). Both waves' model-code axes needed **zero new
+implementation** beyond RW-5's one-line guard fix — everything else was already wired in phase 3;
+this is purely config+run+analysis work, which is why 2 full waves fit in one session.
 
 Built: `src/llmlab/data/loader.py` (`MixedSourceLoader`/`Source` — memmap random-offset
 sampling, stateless given `(seed, step)` so resume needs no sampler state, per-source mixing
@@ -178,10 +193,10 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 
 - [x] Seed-noise study: `20260712_p5_s-seed-{1338,1339}` + reused `20260711_p4_s-baseline` as
   seed 1/3 → noise floor mean 3.5043, std 0.0062, **spread 0.0150** (D-035, logged in
-  `docs/EXPERIMENTS.md`). Ran on the still-live RTX 5090 gpuhub instance (`scripts/cloud/
-  remote.env`, port 25864 as of this update — **instance was left running after this session,
-  check whether it's still up/billing before the next session** since gpuhub host/port can
-  change on stop/restart).
+  `docs/EXPERIMENTS.md`). Ran on the RTX 5090 gpuhub instance (`scripts/cloud/remote.env`, port
+  25864 — **shut down at this session's end (user confirmed), NOT running/billing anymore**;
+  `remote.env` will need updating with a new host/port once a fresh instance is provisioned —
+  re-provision from the saved "genesis" image, D-029/CLOUD_GPUHUB.md).
 - [x] Wave A — Norms & activations (4 runs, D-036): RMSNorm→LayerNorm **borderline** (-0.0158,
   at the noise floor, RMSNorm kept for compute cost); pre→post norm **negative result as
   predicted** (stagnates ~loss 6.8 by step 150, degenerate samples, NOT a blow-up — grad_norm
@@ -189,7 +204,16 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   confirms D-016); **+QK-norm real, robust WIN** (-0.062, gap widening over training — best of
   the wave, a genuine surprise, recommend as new default going forward). Figure:
   `docs/results/wave_a_norms_activations.png`. Summary: `docs/results/ablation_log.md`.
-- [ ] Wave B — Positional encodings (4-5 runs + length-extrapolation probe, train@512/eval@1024/2048)
+- [x] Wave B — Positional encodings (D-037): learned **real, worse** (+0.227, cannot
+  extrapolate past 512 by construction); sinusoidal **real, WORST of the wave** (+1.486, a
+  surprise — notably worse than even learned); **ALiBi real, BEST of the wave** (-0.021 at
+  trained length, AND val_loss **improves** with more context: ppl 32.56→32.08→31.67 at
+  512→1024→2048 — clean small-scale reproduction of the paper's headline claim, RoPE degrades
+  33.24→36.79→45.68 by comparison); NoPE **real, worse + catastrophic under extrapolation**
+  (ppl 40→67→732). Required a real code fix first (RW-5, partially resolved): `GPT.forward()`'s
+  `max_seq_len` guard now only applies to learned/sinusoidal, not rope/alibi/none — see
+  `src/llmlab/model/gpt.py`, `tests/test_model.py`, new `scripts/eval_extrapolation.py`. Figure:
+  `docs/results/wave_b_positional_encodings.png`.
 - [ ] Wave C — Attention variants (MHA/MQA/GQA/MLA) + KV-cache-bytes + gen tok/s — MLA needs a
   full session, `notebooks/06_mla_explained.ipynb`
 - [ ] Wave D — Optimizers & schedules (AdamW sweeps, Lion, Muon, cosine/WSD/constant, z-loss,
@@ -213,7 +237,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 **Separately, a discussion session happened 2026-07-12** on sequence length vs. token count vs. model size — what each axis actually controls, minimum config per phase-5 learning goal (mapped onto the existing wave structure), and why the capstone's chat-context need is a deliberate separate decision. Full note: `docs/learnings/20260712_model-config-strategy.md`. Spawned **RW-5** (see Rework queue): `GPT.forward()` hard-rejects sequences longer than `max_seq_len`, blocking both Wave B's length-extrapolation probe and a wider-context L-tier capstone.
 
 **Open item for next session: `scripts/cloud/gpuhub_setup.sh` has an uncommitted local fix** (D-029's PATH/rclone fix) that was never pushed to GitHub — this caused the exact same bug to reproduce when setting up the RTX 5090 instance via the curl-from-GitHub one-liner (worked around via `scp` instead, see D-032). Ask the user whether to commit+push this session's changes (git commits are user-initiated per CLAUDE.md — not done automatically). Projected the L-tier hero run (2.1B tokens) at ~13.7hr/~$3.43 on this tier alone — cheaper than the original 5090 "$10-20" estimate; **update `configs/train_s_*.yaml` to `micro_batch=32` before any real run on this tier** (Mac's `micro_batch=16` default isn't gpuhub's optimum). `scripts/cloud/remote.env` is now filled in for this instance so `./scripts/cloud/sync_down.sh` is one command. **Remaining:** repeat only the CUDA-version check on an actual RTX 5090 once gpuhub has inventory (everything else already proven); also flagged (not fixed) — `GPT.forward()` blocks phase 5 Wave B's length-extrapolation probe (hard-rejects seq_len > `max_seq_len`), and `find_batch_size.py`'s `mem_gb` column is unreliable (see D-030). Live playbook: `docs/CLOUD_GPUHUB.md`. | D-017 (superseded for the active path by D-027) | 4 | in-progress (essentially done pending 5090 availability) |
-| RW-5 | `GPT.forward()` hard-rejects any sequence longer than `model_config.max_seq_len` (`ValueError`) — blocks (a) phase 5 Wave B's planned length-extrapolation probe (train at 512, eval ppl at 1024/2048 to show RoPE/ALiBi's advantage over learned/sinusoidal), which needs eval-only forward passes to exceed the trained length; (b) the phase-9 capstone's chat-usability goal, which needs a real (not just extrapolated) 2k+ context window — the user wants the final model to "carry small chats that make sense," and per the 2026-07-12 discussion (`docs/learnings/20260712_model-config-strategy.md`) that means `model_l.yaml`'s `max_seq_len` should probably be trained at ~2048 natively, a deliberate choice made when configuring the L-tier capstone, not left at the S/M-tier ablation default of 512 | Discovered incidentally while GPU-benchmarking seq_len scaling (D-030); RoPE (already the project default, D-016) is one of the position encodings best suited to this, so the fix is well-aligned with existing choices | 5 (Wave B relaxation) / 9 (L-tier capstone max_seq_len decision) | todo |
+| RW-5 | `GPT.forward()` hard-rejects any sequence longer than `model_config.max_seq_len` (`ValueError`) — blocked (a) phase 5 Wave B's length-extrapolation probe and (b) the phase-9 capstone's chat-usability goal (real, not just extrapolated, 2k+ context). **Part (a) DONE 2026-07-12 (D-037)**: `forward()`'s guard now only applies to `learned`/`sinusoidal` (physically bounded); rope/alibi/none can run past `max_seq_len` at eval time. Probe ran clean: ALiBi improves with length (ppl 32.56→31.67 @512→2048), RoPE degrades gracefully (33.24→45.68), NoPE collapses (40→732) — real data point for part (b)'s decision, arguing ALiBi deserves consideration alongside RoPE. **Part (b) still open**: `model_l.yaml`'s `max_seq_len` (currently 512, same as S/M) should be deliberately reconsidered for the L-tier capstone per the 2026-07-12 discussion (`docs/learnings/20260712_model-config-strategy.md`) — likely ~2048 native, and now also an open question of RoPE vs ALiBi for that tier given D-037's result | Discovered incidentally while GPU-benchmarking seq_len scaling (D-030); RoPE (already the project default, D-016) is one of the position encodings best suited to this, so the fix is well-aligned with existing choices | 5 (done) / 9 (L-tier capstone max_seq_len + pos_encoding decision, still open) | in-progress |
 | RW-4 | Domain corpus expansion (finance/self-help/wisdom): user picks PD-only books (Gutenberg-era finance/self-help classics — modern bestsellers are copyrighted), optionally + finance-filtered FineWeb-Edu slice; loader gets per-source mixing weights so domain share of the TRAINING STREAM (not disk) is explicit; keep domain repetition ≤~4 epochs. User's target: 10–20% (recommendation 15–25%); final % is the user's call when phase 4 builds the loader. Also: finance/wisdom probes in phase 6, domain-mix ablation in P5-G (specs updated) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 4 (loader + corpus) / 6 (probes) / 5-G (ablation) | todo |
 
 ## Parking lot (future ideas, deliberately not scheduled)

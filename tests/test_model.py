@@ -58,12 +58,25 @@ def test_forward_shapes(device):
     assert loss_none is None
 
 
-def test_exceeding_max_seq_len_raises(device):
-    cfg = tiny_config()
+@pytest.mark.parametrize("pos_encoding", ["learned", "sinusoidal"])
+def test_exceeding_max_seq_len_raises_for_bounded_encodings(device, pos_encoding):
+    """learned/sinusoidal have a fixed-size table sized to max_seq_len -- can't extrapolate."""
+    cfg = tiny_config(pos_encoding=pos_encoding)
     model = GPT(cfg).to(device)
     x = torch.randint(0, cfg.vocab_size, (1, cfg.max_seq_len + 1), device=device)
     with pytest.raises(ValueError):
         model(x)
+
+
+@pytest.mark.parametrize("pos_encoding", ["rope", "alibi", "none"])
+def test_exceeding_max_seq_len_allowed_for_unbounded_encodings(device, pos_encoding):
+    """RoPE/ALiBi/none compute position info on the fly, so eval-time forward passes beyond
+    max_seq_len must succeed -- this is what the phase-5 length-extrapolation probe needs (RW-5)."""
+    cfg = tiny_config(pos_encoding=pos_encoding)
+    model = GPT(cfg).to(device)
+    x = torch.randint(0, cfg.vocab_size, (1, cfg.max_seq_len + 8), device=device)
+    logits, _ = model(x)
+    assert logits.shape == (1, cfg.max_seq_len + 8, cfg.vocab_size)
 
 
 # -- causal mask ---------------------------------------------------------------

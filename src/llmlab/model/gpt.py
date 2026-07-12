@@ -113,7 +113,11 @@ class GPT(nn.Module):
         self, idx: torch.Tensor, targets: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         B, T = idx.shape
-        if T > self.cfg.max_seq_len:
+        if T > self.cfg.max_seq_len and self.cfg.pos_encoding in ("learned", "sinusoidal"):
+            # Only these two are physically bounded by max_seq_len (fixed-size lookup
+            # table/precomputed pe table). RoPE/ALiBi/none derive position info on the fly per
+            # forward call, so they can run at any T -- that's exactly what makes the phase-5
+            # Wave B length-extrapolation probe (train@512, eval ppl@1024/2048) possible (RW-5).
             raise ValueError(f"sequence length {T} exceeds max_seq_len {self.cfg.max_seq_len}")
 
         x = self.tok_emb(idx)

@@ -1160,4 +1160,67 @@ until more waves land per the phase-5 exit criteria ("best-found recipe" implies
 MLA has its own decoupled-RoPE-key mechanism that might make qk_norm redundant or conflicting —
 check when implementing MLA).
 
-<!-- Append new decisions below. Next ID: D-037 -->
+## D-037 — Wave B (positional encodings) complete: ALiBi outperforms RoPE and extrapolates cleanly, sinusoidal is a genuine surprise-worst, RW-5's forward() fix lands (2026-07-12, phase 5)
+**Decision:** Ran all 4 Wave B ablations (`docs/phases/phase5_ablations.md`) same session/instance
+as Wave A, same baseline (`20260711_p4_s-baseline`, RoPE) and seed (1337). Before running,
+implemented **RW-5's fix**: `GPT.forward()` (`src/llmlab/model/gpt.py`) previously hard-rejected
+ANY sequence longer than `max_seq_len` for every `pos_encoding`; changed the guard to only apply
+to `learned`/`sinusoidal` (whose position tables are physically sized to `max_seq_len`) — RoPE/
+ALiBi/none compute position info on the fly per forward call and have no such limit. Updated
+`tests/test_model.py`'s `test_exceeding_max_seq_len_raises` into two parametrized tests
+(`..._raises_for_bounded_encodings` for learned/sinusoidal, `..._allowed_for_unbounded_encodings`
+for rope/alibi/none) — a deliberate behavior change, not a silent one. Full suite (59 local/mps+
+cpu, 42 remote/cuda-only) green after the change. Also wrote `scripts/eval_extrapolation.py` (new
+permanent script, not a one-off): loads a run's checkpoint + config, builds a fresh
+`MixedSourceLoader` at any seq_len against `val_sources`, reports val_loss/ppl or the expected
+`ValueError` for bounded encodings — reusable for any future length-extrapolation work.
+
+**Results (val_loss delta vs RoPE baseline at trained length, seq_len=512):**
+| pos_encoding | final val_loss | delta | verdict |
+|---|---|---|---|
+| learned | 3.7311 | +0.227 | real, worse |
+| sinusoidal | 4.9896 | +1.486 | real, WORST — surprise |
+| **alibi** | 3.4830 | **-0.021** | real, best |
+| none (NoPE) | 3.6997 | +0.196 | real, worse |
+
+**Length-extrapolation probe (train@512, eval ppl@512/1024/2048), the headline result of this
+wave:**
+| pos_encoding | ppl@512 | ppl@1024 | ppl@2048 |
+|---|---|---|---|
+| rope (baseline) | 33.24 | 36.79 | 45.68 (degrades gracefully) |
+| **alibi** | 32.56 | 32.08 | **31.67 (IMPROVES)** |
+| none (NoPE) | 40.43 | 67.18 | **731.91 (collapses)** |
+| learned/sinusoidal | 41.73/146.87 | ValueError (physically bounded) | ValueError |
+
+**ALiBi beating RoPE, and improving rather than degrading under extrapolation, is a clean
+small-scale reproduction of the ALiBi paper's headline claim** — genuinely useful evidence for
+any future long-context decision (RW-5's other half: the phase-9 capstone's chat-context goal
+wants ~2048+ tokens of usable context; this result argues ALiBi deserves serious consideration
+there, not just RoPE by default). **Sinusoidal losing to `learned` by such a wide margin (+1.486
+vs +0.227) was not expected** — going in, both were assumed roughly equivalent (same "additive
+at the input, absolute position" mechanism, sinusoidal just without learnable parameters); the
+gap suggests the model benefits substantially from being able to *adapt* its position
+representation, even at this small scale, more than theory alone would predict.
+
+**Options considered:** relax the `max_seq_len` guard for ALL encodings including learned/
+sinusoidal (rejected — would silently produce garbage/index-errors for those, since their tables
+are genuinely finite; the current per-encoding guard gives a clear, intentional `ValueError`
+instead); skip the length-extrapolation probe until RW-5 is "fully" fixed with a broader
+refactor (rejected — the narrow, well-scoped fix applied here is exactly what RW-5 asked for and
+unblocks Wave B without overreaching into unrelated code).
+**Why this matters:** the length-extrapolation result is one of this project's clearest paper
+reproductions to date, and directly informs a phase-9 decision (capstone context length, RW-5).
+**Impacts:** `src/llmlab/model/gpt.py` (forward() guard), `tests/test_model.py` (2 tests
+replacing 1), `scripts/eval_extrapolation.py` (new script), `experiments/registry.csv` (4 new
+rows), `experiments/20260712_p5_s-wave-b-{learned,sinusoidal,alibi,nope}/` (config+metrics+
+samples+notes.md; checkpoints stayed on the remote instance), `docs/results/
+wave_b_positional_encodings.png`, `docs/results/ablation_log.md`. RW-5's phase-9 half (capstone
+`max_seq_len` decision) is unaffected — still open, but now with an ALiBi-vs-RoPE data point to
+inform it when that decision comes up.
+**Revisit if:** a later wave or the phase-9 capstone needs a firm real-context-length decision —
+re-run this same probe at M/L tier before trusting these S-tier-only numbers at larger scale
+(sinusoidal's surprise result especially should be re-checked, since D-016/D-021's hyperparameters
+were tuned around RoPE, not sinusoidal, and might not be a fair comparison at a different lr/
+schedule).
+
+<!-- Append new decisions below. Next ID: D-038 -->
