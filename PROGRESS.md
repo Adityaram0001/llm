@@ -3,39 +3,68 @@
 > Every Claude session reads this first and updates it last. Keep it honest and terse.
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
-**Active phase:** Phase 4 — `docs/phases/phase4_training.md`
-**Last session:** 2026-07-11 — Phase 4 started with RW-1 (data prep), per user's choice to do
-data prep before the training engine. Extended `scripts/tokenize_corpus.py` with a streaming
-`--supplement {tinystories,fineweb}` mode (batch-encode via HF `encode_batch`, append to disk
-incrementally, per-doc `doc_starts` in a sibling `.npy` rather than bloating `meta.json`).
-**Bug caught while building it (D-019):** the phase-1 TinyStories writer joined stories with
-`"\n\n"`, but 94% of rows have their own internal blank-line paragraph breaks — a first
-streaming-tokenizer pass split on every blank line and produced 11.25M "documents" against the
-real ~2.12M stories, inserting spurious mid-story `<|endoftext|>` tokens. Caught by
-cross-checking `n_docs` against D-013's known story count. Fixed `acquire.py` to collapse
-internal blank lines before writing (so `"\n\n"` means only "document boundary"), regenerated
-`tinystories.txt` from the HF-cached dataset (no re-download) and retokenized — verified doc 0
-now spans its full 3 paragraphs ending in one real EOT. Then built
-`acquire.build_fineweb_edu_supplement` (same D-019 fix applied proactively) and, with the
-user's go-ahead + sizing choice (D-020: ~1B tokens / sample-10BT config / 3.6GB text over
-~300M/~500M alternatives), streamed+tokenized a FineWeb-Edu sample: 992.8M tokens / 808,365
-docs, doc-boundary spot-checks clean. **RW-1's tokenization work is done**: both supplements
-live at `data/tokenized/hf_bpe_16k/supplement_{tinystories,fineweb}.bin` +
-`supplement_{tinystories,fineweb}_docstarts.npy`. Combined fresh-token pool is now ~1.53B
-(17.67M books+dict + 520.5M tinystories + 992.8M fineweb) — at Muennighoff's ~4-epoch ceiling
-that's ~6.1B tokens against the L-tier's ~2.1B need (D-015), a comfortable ~2.9x margin (up
-from the "zero margin" state D-015 flagged). RW-1's last step — pushing these bins to the R2
-bucket via `scripts/cloud/data_push.sh` — is **not done**: rclone isn't installed and no `r2`
-remote is configured (that's RW-3, which the user explicitly deferred this session to
-prioritize data prep). Training-engine deliverables (loader.py, trainer.py, scripts/train.py,
-find_batch_size.py, first S-tier experiments) are **not started yet** — next session's job.
-**Open blockers:** none for continuing phase 4 locally (S-tier training only needs the
-already-tokenized books+dictionary `train.bin`/`val.bin`, untouched by this session). RW-3
-(cloud accounts) should happen before the first M/L-tier run, not before S-tier engine work.
-The D-008 flag (hero run ≈ 1.5–3 weeks on the Mac) remains resolved in principle by **D-010**:
-rented RTX 5090 as burst compute for M/L-tier runs (playbook `docs/CLOUD.md`, scripts in
-`scripts/cloud/`). Final go/no-go + provider choice happens when the first big run is actually
-needed.
+**Active phase:** Phase 4 is **done** (milestone M1 declared, see exit-criteria check below) —
+Phase 5 (`docs/phases/phase5_ablations.md`) is next, not yet started as of this update.
+**Last session:** 2026-07-11 evening through 2026-07-12 — built the whole training engine
+(deliverables 0b, 1, 2, 3, 3b), ran the first real experiments including an unattended overnight
+lr-sweep + baseline pipeline, then reviewed the results.
+
+Built: `src/llmlab/data/loader.py` (`MixedSourceLoader`/`Source` — memmap random-offset
+sampling, stateless given `(seed, step)` so resume needs no sampler state, per-source mixing
+weights + optional doc-boundary-respecting mode for RW-4 later); `src/llmlab/train/config.py`
+(`TrainConfig` + nested dataclasses) and `src/llmlab/train/trainer.py` (`Trainer`: param groups,
+warmup+cosine lr schedule, grad accumulation/clipping, eval loop, text sampling, checkpointing,
+metrics.jsonl+wandb logging, graceful Ctrl-C, registry row); `scripts/train.py` (CLI, run-folder
+creation, `--resume`, `--device` override); `scripts/find_batch_size.py` (D-018 calibration).
+Configs: `configs/train_s_{baseline,smoke,cpu_canary,lr_sweep_{lo,mid,hi}}.yaml`. Tests:
+`tests/test_loader.py` (7 tests), `tests/test_trainer.py` (3 tests) — full suite 61 passed.
+
+**Decisions logged:** D-021 (baseline hyperparameters: lr 1e-3, effective batch ~64K tokens,
+eval every 100 steps), D-022 (real MPS throughput for the S-tier model is flat ~11K tok/s across
+micro_batch 1-32, not D-008's ~20.8K dummy-model estimate — kept micro_batch=16 anyway since
+larger is free when flat; also fixed a list-aliasing bug in `find_batch_size.py`'s plateau
+detection), D-023 (two real trainer bugs found via an actual kill+resume test, not just unit
+tests: `wandb.init()` was silently swallowing SIGINT, and a step-checkpointing off-by-one made
+resume replay — and double-apply the gradient update for — the last completed step; both fixed
+and reverified bit-exact), D-024 (overnight lr-sweep-then-baseline automation), **D-025
+(the sweep's result reviewed: D-021's lr=1e-3 ratified, not overridden — see below)**.
+
+**All experiments run/registered/reviewed this session:**
+- `20260711_p4_cpu-canary` — deliverable 0b portability canary (`--device cpu`), passed.
+- `20260711_p4_s-smoke` — 150 steps, loss 9.69→5.38, samples already show dictionary-entry
+  formatting.
+- `20260711_p4_resume-test` — real `kill -INT` + `--resume`, bit-exact reproduction verified
+  after the D-023 fixes (full bug story in its notes.md).
+- `20260711_p4_s-lr-sweep-{lo,mid,hi}` (lr 3e-4/1e-3/3e-3, 300 steps each) — **mid (1e-3) won,
+  strictly ahead of both alternatives at every logged checkpoint**, not just at the end; lo was
+  undertrained (not unstable, just slower); hi didn't diverge (`grad_clip=1.0` held) but was
+  consistently worse despite ending with a *lower* mean grad_norm than mid — a real lesson that
+  clipping bounds the damage from a bad lr, not the outcome. See D-025 and each run's notes.md.
+- `20260711_p4_s-baseline` — **THE S-tier reference run**, lr=1e-3 (ratified default), 1500
+  steps / 98.3M tokens, val_loss 9.55→**3.5037** (perplexity 33.2), textbook power-law loss
+  curve. Samples pick up the corpus's Socratic-dialogue register specifically by step 800 (see
+  notes.md for the actual generated text) — legible evidence the model is learning from *this*
+  corpus, not generic English. One open observation for phase 6: the dictionary-format prompt's
+  output drifts toward book-prose by later checkpoints, plausibly because dictionary entries are
+  a small minority of the S-tier corpus — worth a phase-6 eval probe.
+
+All four registry rows now have real verdicts (not the auto-generated "review and fill in
+notes.md" placeholder) and real notes.md conclusions.
+
+`notebooks/05_compare_runs.ipynb` executes cleanly; re-run it now that the lr-sweep/baseline
+runs exist (last executed mid-pipeline, so sections 4 still show the "skipping" message from
+before the sweep/baseline landed — cosmetic only, the data is all there in metrics.jsonl).
+
+**Exit criteria check (`docs/phases/phase4_training.md`):** baseline finished & registered ✅;
+samples read as English-ish ✅ (Socratic-dialogue prose by step 800); resume verified ✅ (D-023,
+bit-exact); comparison notebook renders ✅ (re-run for fresh plots, not required for the
+criterion itself). **Milestone M1 can be declared.**
+
+**Still open from before this session (unaffected by this work):** RW-1's last step (pushing
+tokenized supplement bins to the R2 bucket) remains blocked on RW-3 (cloud accounts: rclone/
+remote not set up) — still not needed for any S-tier work. RW-4 (domain corpus expansion) still
+needs the user to pick titles; the loader's per-source mixing-weight design (`MixedSourceLoader`)
+was built general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happens.
 
 ## Phase status
 
@@ -45,7 +74,7 @@ needed.
 | 1 | Corpus: books + dictionary | `docs/phases/phase1_data.md` | done |
 | 2 | Tokenizers (scratch + HF) | `docs/phases/phase2_tokenizer.md` | done |
 | 3 | Model architecture | `docs/phases/phase3_architecture.md` | done |
-| 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | in-progress |
+| 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | done |
 | 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | todo |
 | 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | todo |
 | 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | todo |
@@ -117,20 +146,23 @@ needed.
 - [x] `notebooks/04_shapes_walkthrough.ipynb`: executes cleanly end to end
 - [x] PROGRESS.md + DECISIONS.md updated (D-015, D-016); phase marked done
 
-## Phase 4 checklist (in-progress)
+## Phase 4 checklist (done)
 
 - [x] 0a. Data prep (RW-1): TinyStories + FineWeb-Edu tokenized to
   `data/tokenized/hf_bpe_16k/supplement_{tinystories,fineweb}.bin` (+ docstarts `.npy`); D-019
   bug fix (ambiguous story boundaries) + D-020 (FineWeb-Edu sizing) logged. R2 push (bucket
   step) deferred — blocked on RW-3, not required for S-tier work.
-- [ ] 0b. Portability smoke test (`--device cpu` canary) — not yet exercised (no training code
-  written yet)
-- [ ] 1. `src/llmlab/data/loader.py` (memmap sampler + per-source mixing weights)
-- [ ] 2. `src/llmlab/train/trainer.py`
-- [ ] 3. `scripts/train.py`
-- [ ] 3b. `scripts/find_batch_size.py` (D-018)
-- [ ] 4. First experiments: `p4_smoke`, `p4_s_baseline`, `p4_s_lr_sweep`, resume test
-- [ ] 5. `notebooks/05_compare_runs.ipynb`
+- [x] 0b. Portability smoke test (`--device cpu` canary) — `20260711_p4_cpu-canary`, passed
+- [x] 1. `src/llmlab/data/loader.py` (memmap sampler + per-source mixing weights) — `MixedSourceLoader`/`Source`, 7 tests
+- [x] 2. `src/llmlab/train/trainer.py` — built + two real bugs found/fixed via live resume test (D-023)
+- [x] 3. `scripts/train.py`
+- [x] 3b. `scripts/find_batch_size.py` (D-018) — real S-tier MPS numbers in D-022 (list-aliasing bug fixed)
+- [x] 4. First experiments, all registered with real verdicts: `p4_smoke` (loss 9.69→5.38),
+  resume test (D-023, bit-exact verified), `p4_s_lr_sweep_{lo,mid,hi}` (1e-3 won at every
+  checkpoint, D-025), `p4_s_baseline` (1500 steps, val_loss 3.5037/ppl 33.2, D-025)
+- [x] 5. `notebooks/05_compare_runs.ipynb` — executes cleanly, includes a numbers-grounded
+  "reading a loss curve" section; sections 4 (lr sweep) and the baseline cell will populate once
+  the overnight pipeline's runs exist
 
 ## Rework queue (see CLAUDE.md "Change management")
 
@@ -151,21 +183,27 @@ needed.
 
 ## Run ledger (latest 10 — full list in experiments/registry.csv)
 
-5 non-training comparison rows from the phase-2 tokenizer study (`20260710_p2_tokenizer-*`) —
-see `experiments/registry.csv`. No model training has happened yet (phases 0-2 were
-environment + data + tokenizer setup).
+First real training runs happened this session (phases 0-3 were environment/data/tokenizer/
+architecture setup, no training). Phase-4 rows so far: `20260711_p4_cpu-canary` (portability
+canary, passed), `20260711_p4_s-smoke` (150 steps, val_loss 5.24), `20260711_p4_resume-test`
+(bit-exact resume verified after D-023's fixes). Plus, from the still-running-as-of-session-end
+overnight pipeline (D-024): `20260711_p4_s-lr-sweep-{lo,mid,hi}` and `20260711_p4_s-baseline`
+(or `-auto`) — check `experiments/registry.csv`'s actual tail next session, these may not all
+be present/final yet depending on when the pipeline is read. 5 non-training comparison rows
+from the phase-2 tokenizer study (`20260710_p2_tokenizer-*`) are also in the registry.
 
 ## Notes for next session
 
-- RW-1's data prep is done (D-019, D-020) — start the actual **training engine** deliverables
-  next: `src/llmlab/data/loader.py` (memmap random-offset (x,y) sampler, deterministic given
-  seed+step, per-source mixing weights so a loader can combine books/dict/tinystories/fineweb
-  by config-driven ratio — note RW-4 wants this same mixing-weight mechanism for domain data,
-  so design it general-purpose from the start), then `src/llmlab/train/trainer.py`,
-  `scripts/train.py`, `scripts/find_batch_size.py`, then the S-tier `p4_smoke`/`p4_s_baseline`/
-  `p4_s_lr_sweep` experiments (all S-tier — only need the already-tokenized books+dictionary
-  `train.bin`/`val.bin`, not the new supplements). See `docs/phases/phase4_training.md`
-  deliverables 0b–5 for the full spec (0a/RW-1 is the only deliverable now complete).
+- **The training engine is built** (this session): `src/llmlab/data/loader.py`
+  (`MixedSourceLoader`/`Source`), `src/llmlab/train/{config,trainer}.py` (`TrainConfig`,
+  `Trainer`), `scripts/train.py`, `scripts/find_batch_size.py`, plus
+  `configs/train_s_{baseline,smoke,cpu_canary,lr_sweep_{lo,mid,hi}}.yaml`. See D-021 (baseline
+  hyperparameters), D-022 (real MPS throughput numbers), D-023 (two resume-path bugs found and
+  fixed — read this before touching `trainer.py`'s `fit()` or `Trainer.__init__`'s wandb setup
+  again, the reasoning is non-obvious). `tests/test_loader.py` + `tests/test_trainer.py` are the
+  reference for how the loader/trainer behave. **First check the "OVERNIGHT PIPELINE" note
+  above** — `p4_s_baseline` and `p4_s_lr_sweep` may already be finished, in progress, or need a
+  `--resume`/re-launch depending on when this is read.
 - RW-3 (one-time cloud accounts: GitHub remote, Docker Hub + image build, R2 bucket + rclone,
   pod template) is user-facing setup — still not started (rclone isn't installed). Not a
   blocker for S-tier engine work; walk it interactively before the first M-tier run, and as
@@ -211,9 +249,12 @@ environment + data + tokenizer setup).
 - Environment is ready: `source .venv/bin/activate`, `llmlab` importable, jupyter kernel `llm-lab`
   registered. `src/llmlab/utils.py` has `set_seed`, `get_device`, `param_count`, `mem_stats` —
   reuse these rather than re-deriving them in phase 3+ scripts.
-- Micro-batch guidance from D-008 (for whenever phase 4 needs training defaults): at seq_len 512
-  the throughput plateau is around micro-batch 8-16; don't push batch size to the edge of what
-  fits in MPS memory — there's a cliff (3-15x slowdown) well before a real OOM.
+- Micro-batch guidance: D-008's dummy-model bench suggested a throughput plateau around
+  micro-batch 8-16 at seq_len 512, ~20.8K tok/s. **D-022 measured the real S-tier model** and
+  found throughput actually flat (~11K tok/s) from micro_batch 1 through 32 — about half D-008's
+  number, likely RoPE/SwiGLU/GQA's extra fixed overhead per layer. `micro_batch=16` was kept
+  anyway (larger is free when flat, fewer grad-accum iterations). Re-run
+  `scripts/find_batch_size.py` on any new hardware (D-018) rather than assuming either number.
 - D-008 timeline tension resolved by D-010 (cloud burst option). From phase 4 onward, ALL
   training code must follow `docs/CLOUD.md` portability rules (device via
   `llmlab.utils.get_device()`/`autocast_ctx()` — already updated to be cuda>mps>cpu aware).

@@ -1,0 +1,49 @@
+seed: 1337
+model_config: configs/model_s.yaml
+tokenizer_dir: data/tokenized/tokenizers/hf_bpe_16k
+seq_len: 512
+sources:
+- name: books_dict
+  path: data/tokenized/hf_bpe_16k/train.bin
+  weight: 1.0
+  respect_doc_boundaries: false
+  docstarts_path: null
+val_sources:
+- name: books_dict_val
+  path: data/tokenized/hf_bpe_16k/val.bin
+  weight: 1.0
+  respect_doc_boundaries: false
+  docstarts_path: null
+optim:
+  lr: 0.0003
+  lr_min_ratio: 0.1
+  warmup_steps: 15
+  betas:
+  - 0.9
+  - 0.95
+  weight_decay: 0.1
+  grad_clip: 1.0
+batch:
+  micro_batch: 16
+  grad_accum: 8
+max_steps: 300
+eval:
+  eval_every: 50
+  eval_batches: 32
+  eval_batch_size: 16
+sampling:
+  sample_every: 100
+  max_new_tokens: 60
+  prompts:
+  - Once upon a time
+  - 'ephemeral (adjective):'
+logging:
+  log_every: 10
+  wandb_project: llm-lab
+  wandb_mode: offline
+device: null
+checkpoint_every: 150
+phase: 4
+tier: S
+baseline_run: 20260711_p4_s-baseline
+variable_changed: lr=3e-4 (0.3x baseline)

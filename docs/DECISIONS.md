@@ -464,4 +464,179 @@ this session, since the user explicitly deferred RW-3 to prioritize this data-pr
 design, or plain fluency-focused defaults) show FineWeb-Edu's share needs to be much larger or
 smaller than what a straightforward "add margin" read of this entry assumed.
 
-<!-- Append new decisions below. Next ID: D-021 -->
+## D-021 — S-tier baseline hyperparameters: lr 1e-3, effective batch ~64K tokens, eval every 100 steps  (2026-07-11, phase 4)
+**Decision:** `configs/train_s_baseline.yaml` (the `p4_s_baseline` reference run): peak
+**lr 1e-3**, linear warmup 30 steps (~2%) then cosine decay to `lr * 0.1`, AdamW
+`betas=(0.9, 0.95)`, `weight_decay=0.1` (matrix weights only, see below), `grad_clip=1.0`.
+**Effective batch ~65,536 tokens/step** (`micro_batch=16 * grad_accum=8 * seq_len=512`),
+`max_steps=1500` (~98.3M tokens). **Eval every 100 steps**, 32 fixed batches (batch_size 16).
+AdamW uses two param groups: weight decay on attention/FFN projection weights only, none on
+norm gains or the (tied) token embedding.
+
+**Options considered (lr):** the phase-4 spec's own draft suggested ~3e-4 (a GPT-2-small-scale
+convention). Two independent, more size-appropriate estimates disagreed: nanoGPT's own
+"shakespeare-char" reference config (~10.65M params, essentially the same scale as our 9.71M
+S-tier) uses `lr=1e-3`; the GPT-3 paper's empirical lr-vs-log(params) fit, extrapolated to
+9.71M params, also gives ~1e-3. Chose **1e-3**, matching both.
+
+**Options considered (effective batch):** the spec's draft suggested ~0.25-0.5M tokens (GPT-2-
+small's own convention). But our 17.67M-token S-tier train corpus means a 250K-500K batch
+would give only ~400-800 optimizer steps over the ~100M-token baseline run -- too coarse to
+resolve a cosine schedule or a clean lr-sweep divergence. nanoGPT's tiny-scale reference config
+(again, ~10.65M params) uses only ~16K tokens/batch. Chose **~64K tokens** (micro_batch=16,
+grad_accum=8) as a middle point matching that scale's convention while keeping `micro_batch=16`
+(see D-022, MPS calibration) rather than nanoGPT's literal 64 sequences x 256 tokens.
+
+**Why (param groups, no decay on norms/embeddings):** weight decay's "shrink toward zero"
+regularization doesn't make sense for a norm gain (a single learned scale, not a projection
+trading off against overfitting) or for an embedding table (decaying a rarely-seen token's row
+toward zero destroys its already data-starved representation rather than regularizing it). This
+model has no biases (`bias=False` throughout, D-016), so the no-decay group is exactly
+`{tok_emb, all norm weights}`.
+
+**Why (eval cadence):** S-tier steps are cheap (seconds), so frequent eval costs little and
+buys fine-grained loss-curve resolution for teaching; 32 fixed batches against `val.bin`'s
+179,655 tokens (~350 non-overlapping 512-token windows) gives a stable estimate without eval
+dominating wall-clock.
+
+**Revisit if:** the lr-sweep (`p4_s_lr_sweep`, this session's overnight pipeline) finds a
+clearly better lr than 1e-3 within the swept range (3e-4 to 3e-3) -- see D-024's provisional,
+pending-ratification note on the auto-picked lr actually used for tonight's baseline run.
+
+## D-022 — Real measured MPS throughput for the S-tier model is flat (~11K tok/s), not D-008's ~20.8K; kept micro_batch=16 anyway  (2026-07-11, phase 4)
+**Decision:** `scripts/find_batch_size.py` (D-018's calibration tool) measured the *actual*
+S-tier model (9.71M params, RoPE + SwiGLU + GQA-capable attention via SDPA) on this Mac at
+seq_len=512: tokens/sec is essentially **flat at ~11,000-11,800** from `micro_batch=1` through
+32 (confirmed with a manual wider sweep: 1->11,563, 2->11,173, 4->11,101, 8->11,340, 16->11,198,
+32->10,926 tok/s) -- barely half of D-008's dummy-TinyGPT bench (~20,800 tok/s at micro_batch=8,
+same seq_len). Kept **`micro_batch=16`** in the train configs anyway (not the raw sweep's
+top-throughput `micro_batch=1`), because with throughput flat, a larger micro-batch is free and
+strictly reduces the number of `grad_accum` iterations needed for the same ~64K-token effective
+batch (D-021) -- fewer Python-loop/data-sampling iterations per optimizer step, and it matches
+the nanoGPT-tiny-scale convention already chosen for lr/batch sizing.
+
+**Also fixed while building the calibration tool:** `find_batch_size.py`'s plateau-detection had
+a classic Python bug -- `plateaued = results and tps < ...` returns the `results` list object
+itself (not a bool) when `results` is empty, so `plateaued` aliased the *same mutable list*;
+the very next line's `results.append(...)` then mutated that aliased object too, making the
+"no prior data yet" check look non-empty by the time `if plateaued:` ran, causing the sweep to
+falsely stop after just one micro-batch size every time. Fixed with an explicit `bool(results)`.
+Caught by manually re-deriving the sweep's expected trace rather than trusting the first run's
+one-line-and-done output.
+
+**Why (the gap from D-008):** D-008's own numbers already flagged that "kernel-launch overhead
+and unified-memory traffic dominate over raw compute" at this parameter scale; the real model's
+extra fixed-cost operations per layer (RoPE cos/sin, SwiGLU's 3 matrices vs. a plain 2-matrix
+GELU MLP, GQA-shaped reshapes into SDPA) plausibly push that fixed overhead higher than the
+simpler dummy benchmark's, while compute itself stays tiny at either scale -- consistent with
+throughput being flat rather than compute-bound-scaling with batch size.
+
+**Revisit if:** a later tier (M/L) or a rented CUDA GPU shows throughput actually scaling with
+micro-batch (i.e., this Mac's flatness is scale/hardware-specific, not a property of the model
+architecture) -- re-run `find_batch_size.py` per D-018's "once per new hardware" rule regardless.
+
+## D-023 — Two trainer bugs found via a real kill+resume test (not just the unit test): wandb swallows SIGINT; step-checkpointing off-by-one  (2026-07-11, phase 4)
+**Decision:** Fixed both in `src/llmlab/train/trainer.py`, verified by actually killing and
+resuming a real CLI run (`20260711_p4_resume-test`) rather than trusting `tests/test_trainer.py`
+alone.
+
+1. **`wandb.init()` installs its own SIGINT handler**, silently swallowing a plain `kill -INT`
+   (i.e. Ctrl-C) so `Trainer.fit()`'s `except KeyboardInterrupt` never fired -- confirmed with
+   a minimal repro (`wandb.init(mode="disabled")` + a bare `time.sleep` loop ignored `kill -INT`
+   entirely; adding `signal.signal(signal.SIGINT, signal.default_int_handler)` after `wandb.init`
+   fixed it). Fix: `Trainer.__init__` now reinstalls the default SIGINT handler immediately
+   after `wandb.init()`.
+2. **Off-by-one in what gets checkpointed as "the current step."** The original `fit()` used
+   `for self.step in pbar` (`pbar` over `range(self.step, max_steps)`), so `self.step` was
+   simultaneously "the step index currently executing" and "the value saved on checkpoint" --
+   but Ctrl-C lands *after* a step's full body (including its `self.step`-keyed logging) has
+   run, while the for-loop hasn't yet advanced its own loop variable to the next value. The
+   checkpoint therefore recorded the *just-completed* step, and resume re-executed (and
+   re-applied the gradient update for) that same step on top of a model that had already taken
+   it once. Caught because the replayed step's logged `train_loss` (9.400) didn't match the
+   original run's (9.706) for the identical step index -- only possible if the model had already
+   moved, since the loader is stateless given `(seed, step)` (loader.py) and should reproduce
+   identical batches. Fix: `fit()` now uses a local `step` loop variable for lr/data-indexing
+   and only bumps `self.step = step + 1` (the correct "next step to run" / safe checkpoint
+   value) after that step's eval/log/sample work completes.
+
+**Verified:** after both fixes, killing `20260711_p4_resume-test` mid-run and resuming via
+`scripts/train.py --resume` reproduced every subsequent logged `train_loss` bit-for-bit against
+an uninterrupted control run (`20260711_p4_cpu-canary`) -- steps 0, 2, 4, 5, 6, 8 all matched to
+the last decimal. Full account in that run's `notes.md`.
+
+**Why this matters beyond just this bug:** neither issue would have been caught by
+`tests/test_trainer.py`'s resume test alone -- that test manages its own `step` variable
+correctly *by construction* (it doesn't drive `Trainer.fit()`), and it never sends a real
+signal. This is a concrete instance of CLAUDE.md's "verify on a real run" instinct catching
+something a green unit-test suite alone did not.
+
+**Impacts:** none outside `trainer.py` -- no real training data has been produced with the
+buggy resume path yet (only this session's own smoke/canary/resume-test runs), so nothing needs
+retroactive correction.
+
+## D-024 — Overnight automation: lr-sweep -> auto-pick winner -> baseline, unattended (2026-07-11, phase 4)
+**Decision:** Per the user's explicit request (going to sleep, wanted zero further approval
+prompts), built `scripts/orchestrate_p4_lr_sweep_and_baseline.py`: runs the 3
+`p4_s_lr_sweep` configs sequentially, disqualifies any run whose `train_loss` ever goes
+non-finite (NaN/Inf -- the lr-hi candidate's "watch divergence on purpose" case), picks the
+survivor with the lowest logged `val_loss`, writes that lr into a **new**
+`configs/train_s_baseline_auto.yaml` (D-021's own `train_s_baseline.yaml` is left untouched),
+and launches the full 1500-step baseline with it. Launched via
+`nohup caffeinate -dims .venv/bin/python scripts/orchestrate_...py > logs/... 2>&1 < /dev/null &
+disown` -- `caffeinate -dims` prevents idle/display/disk/system sleep for as long as the
+pipeline runs (critical: an M4 Mac sleeping overnight would pause/kill MPS training), and
+`nohup`+`disown` detach the process tree from the shell so it survives the terminal (and this
+conversation) closing.
+
+**This is a provisional automation, not a ratified decision.** The winning lr replaces D-021's
+default for *this one baseline run only* -- it has not been reviewed against the actual
+sweep curves yet. Each run gets an auto-written `notes.md`; the baseline run's records which lr
+won and flags itself for next-session review. Treat the resulting `20260711_p4_s-baseline`
+(or `-auto` if a name collision occurred) as provisional until `notebooks/05_compare_runs.ipynb`
+section 4 has been reviewed and this entry (or a superseding one) confirms or overrides the
+auto-picked lr.
+
+**Options considered:** running the lr sweep now and leaving the ~2.5h baseline for later
+(rejected -- user explicitly wanted the full chain unattended overnight); shrinking the
+baseline's step count to fit the session (rejected for the same reason: user wants the real
+1500-step reference run, not a shortened stand-in).
+
+**Why:** ~10,700 tok/s measured throughput (D-022) means the full baseline (~98.3M tokens) takes
+~2.5h and the 3 sweep runs ~30min apiece (~1.5h total) -- ~4h combined, past what's reasonable
+to ask the user to stay awake for, but well suited to overnight unattended compute per CLAUDE.md's
+"Python scripts run from terminal" rule for long jobs.
+
+**Revisit if:** the pipeline's chosen lr conflicts with a more careful reading of the sweep
+curves next session (e.g. the winner only "won" due to short-run noise, not a real trend) --
+override it and log a new D-entry naming this one, per the change-management protocol.
+
+## D-025 — Overnight lr sweep result: D-021's lr=1e-3 ratified (not overridden); p4_s_baseline is complete  (2026-07-12, phase 4)
+**Decision:** Reviewed the overnight pipeline's (D-024) 3-way lr sweep against equal-step val_loss
+curves rather than just the final numbers. lr=1e-3 (`20260711_p4_s-lr-sweep-mid`) was **strictly
+ahead of both lr=3e-4 (`-lo`) and lr=3e-3 (`-hi`) at every logged checkpoint** (steps 0/50/.../250),
+not just at the end -- val_loss 4.729 vs 5.249 (lo) and 4.843 (hi). This **ratifies D-021's
+original default**, it does not override it: the automation's "provisional, pending review" flag
+is resolved with no change needed. `p4_s_baseline` (1500 steps, lr=1e-3, final val_loss 3.5037 /
+ppl 33.2) is therefore the real, final S-tier reference run -- not a placeholder.
+
+**Additional finding (lo/hi behavior):** lr=3e-4 was undertrained rather than unstable (smaller
+per-step movement, not a quality problem, just needs more steps). lr=3e-3 did not diverge
+(`grad_clip=1.0` held) but was still clearly worse than 1e-3, *despite* ending with a lower mean
+grad_norm (0.566) than 1e-3's own run (0.687) -- i.e. `grad_clip` bounds the damage from too
+large an lr, it does not rescue the outcome. "Didn't diverge" is not evidence of "was a good lr."
+
+**Why:** the phase-4 exit criteria (`docs/phases/phase4_training.md`) require the baseline S run
+"finished & registered" with samples reading English-ish and resume verified -- all now true:
+baseline registered with a real verdict (not "review and fill in notes.md"), samples show fluent
+prose picking up the corpus's Socratic-dialogue register by step 800 (see the run's notes.md),
+and resume was verified for real in this session (D-023) with two genuine bugs fixed along the
+way. `notebooks/05_compare_runs.ipynb` renders all of the above cleanly.
+
+**Impacts:** Phase 4 checklist item 4 (First experiments) is now fully done. Milestone M1
+(per the phase's exit criteria) can be declared -- see PROGRESS.md.
+**Revisit if:** phase 5's noise-floor runs (3 seeds of this same baseline) show the sweep's
+margins were within seed noise after all -- unlikely given the consistency across every
+checkpoint, but that's exactly what the noise-floor protocol (`docs/EXPERIMENTS.md`) is for.
+
+<!-- Append new decisions below. Next ID: D-026 -->
