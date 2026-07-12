@@ -188,34 +188,64 @@ step-by-step manual once the pipeline is verified end-to-end on gpuhub's servers
 
 ## 10. GPU tier pick
 
-**Default to RTX 5090 ($0.46/hr) for all real runs — it's strictly better, not just faster
-(D-032).** A full head-to-head comparison against the RTX 4080 dry-run tier ($0.25/hr) found the
-5090 ~3x faster at every tier tested, making it BOTH faster AND cheaper per completed run despite
-costing 84% more per hour — a genuine free lunch at these model sizes, not a speed/cost tradeoff.
-Full methodology, reasoning, and the interesting hardware-behavior differences between the two
-GPUs: `docs/learnings/20260712_gpuhub-rtx4080-capacity.md`. RTX PRO 6000 remains not worth it
-(D-018/D-032: same Blackwell generation as the 5090, ~2x the price, and our models are nowhere
-near VRAM-bound).
+**Default to RTX 5090 ($0.46/hr) for all real runs — best value of the three GPUs tested
+(D-030/D-031/D-032/D-033).** Full methodology, reasoning, and the "extreme" testing story
+(including a self-correction — see below): `docs/learnings/20260712_gpuhub-rtx4080-capacity.md`.
+Raw per-datapoint sweep data (233 rows, all three GPUs): `docs/results/cloud_gpu_benchmarks.csv`.
 
-**Sweet-spot throughput, seq_len=512 (set `batch.micro_batch` to these before a real run —
-DIFFERENT per GPU, and different from the Mac-tuned D-022 defaults still in
-`configs/train_s_*.yaml`):**
+**Cost per real run, all three GPUs (sweet-spot micro_batch, seq_len=512):**
 
-| Tier | RTX 4080 sweet spot | RTX 5090 sweet spot |
-|---|---|---|
-| S (9.71M) | mb=32 → 198,088 tok/s | mb=128 → 627,326 tok/s (still climbing, untested beyond) |
-| M (34.62M) | mb=32 → 72,611 tok/s | mb=32 → 216,199 tok/s (likely underestimated, see learnings doc) |
-| L (104.80M) | mb=16 → 42,499 tok/s | mb=32 → 127,033 tok/s |
+| Tier (budget) | RTX 4080 ($0.25/hr) | RTX 5090 ($0.46/hr) | RTX PRO 6000 ($0.91/hr) |
+|---|---|---|---|
+| S (75M tok) | $0.026 | $0.015 | $0.029 |
+| M (1B tok) | $0.956 | $0.591 | $1.024 |
+| L (2.1B tok, D-015) | $3.431 | $2.112 | $3.458 |
 
-**Cost per real run, head-to-head:** S-tier ablation (75M tok) $0.03→$0.02; M-tier (1B tok)
-$0.96→$0.59; **L-tier hero run (2.1B tok, D-015) $3.43→$2.11, 13.7hr→4.6hr.** Treat the RTX 4080
-tier as a near-free dry-run/debugging sandbox going forward (smoke tests cost about a penny on
-either GPU) — reach for the 5090 whenever inventory allows and the run is real, not exploratory.
+**RTX PRO 6000 is confirmed NOT worth it for this project — even accounting for a real
+architectural advantage at long context (D-033, D-034).** PRO 6000 does have genuinely higher
+memory bandwidth than the 5090 (evidenced by its throughput edge growing from ~2-20% at seq_len
+512 to ~19-30% at seq_len 8192, consistent across all 3 tiers, both GPUs tested with identical
+methodology) — but its ~98% price premium exceeds even that widest measured gap. **RTX 5090 wins
+on cost at every tier and every sequence length tested, 512 through 8192. Use it for all real
+runs.** Treat the RTX 4080 tier as a near-free dry-run/debugging sandbox (a smoke test costs
+about a penny on any of the three GPUs).
 
-The projection is grounded in a real calibration match for S-tier (raw benchmark ≈ actual
-training throughput on the 4080, see D-030) but M/L tiers are still synthetic-benchmark-only on
-both GPUs — a short real training run at M/L tier is worth doing before committing many hours,
-per D-018's own rule.
+**Sweet-spot micro_batch, all three GPUs, same extreme methodology (every sweep run to real OOM
+— set explicitly before a real run, different from the Mac-tuned D-022 default of `micro_batch=16`
+still in `configs/train_s_*.yaml`):**
+
+| Tier | RTX 4080 | RTX 5090 | RTX PRO 6000 |
+|---|---|---|---|
+| S (9.71M) | mb=32 → 198,088 tok/s | mb=64 → 629,837 tok/s | mb=128 → 644,000 tok/s |
+| M (34.62M) | mb=32 → 72,611 tok/s | mb=64 → 215,749 tok/s | mb=64 → 246,864 tok/s |
+| L (104.80M) | mb=16 → 42,499 tok/s | mb=32 → 127,488 tok/s | mb=32 → 153,490 tok/s |
+
+**PRO 6000's throughput edge grows with sequence length (memory-bandwidth effect) — real, but not
+enough to flip the recommendation:**
+
+| Tier | seq=512 | seq=1024 | seq=2048 | seq=4096 | seq=8192 |
+|---|---|---|---|---|---|
+| S | +2.2% | +6.3% | +6.4% | +11.6% | +19.1% |
+| M | +14.4% | +16.2% | +17.5% | +20.5% | +25.2% |
+| L | +20.4% | +21.5% | +23.3% | +25.9% | +30.3% |
+
+Even at the widest measured gap (L-tier @ 8192, PRO 6000 30.3% faster), cost still favors the
+5090: $3.14 vs $4.77 for the L-tier hero budget. Would need PRO 6000's speed edge to exceed its
+~98% price premium to flip this — nowhere close at any tested combination.
+
+**A genuine methodology lesson from this comparison, worth remembering for any future GPU
+comparison:** when benchmarking multiple GPUs against each other, use identical sweep settings
+(same `--max-micro-batch`, same `--plateau-tolerance`) for every candidate — an initial 5090 test
+used a tighter cap and left early-stopping on, producing numbers that looked like "no
+throughput regression on this GPU" when really the test just hadn't been pushed far enough to
+see it (D-032→D-033→D-034 tells the full self-correction story). A partial measurement on one
+GPU compared against a thorough measurement on another can quietly bias a comparison even when
+every individual number is real and correctly measured.
+
+The cost projection is grounded in a real calibration match for S-tier (raw benchmark ≈ actual
+training throughput on the 4080, D-030) but M/L tiers remain synthetic-benchmark-only on all three
+GPUs — a short real training run at M/L tier is worth doing before committing many hours, per
+D-018's own rule.
 
 **Recommended sequencing to minimize billed debugging time** (per `docs/CLOUD.md`'s golden rule
 — GPU time is for training only):

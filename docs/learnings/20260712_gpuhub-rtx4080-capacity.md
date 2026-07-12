@@ -204,6 +204,105 @@ setup), which worked immediately. Lesson: a fix that only exists in an uncommitt
 isn't really "fixed" for any workflow that fetches from the remote — commit fixes to scripts
 promptly, especially ones designed to be pulled by URL.
 
+## RTX PRO 6000 "extreme" test — confirms it's not worth it, and corrects the 5090 comparison
+
+At the user's request to "test to the extreme," a third GPU — RTX PRO 6000, $0.91/hr, 96GB VRAM
+— got the most thorough test of the three: 5 sequence lengths (512 through 8192, not just 3) and,
+critically, **the sweep was run with early-stopping disabled and no artificial batch-size cap**,
+so every single sweep ran to a real CUDA OOM rather than stopping at a heuristic "good enough"
+point. All 120 raw data points are in `docs/results/cloud_gpu_benchmarks.csv` alongside the
+other two GPUs' data (233 rows total).
+
+**Expected result, now confirmed rather than just predicted: RTX PRO 6000 isn't worth it for
+this project.** D-018 reasoned from VRAM math alone that our ~10-105M-param models would never
+need PRO 6000's extra VRAM over the 5090's — now measured directly: PRO 6000 has *higher* raw
+throughput at every tier (S: 644,000 vs 5090's 627,326 tok/s; M: 246,864 vs 216,199; L: 153,490
+vs 127,033) but costs ~2x as much per hour, so it's the *most expensive* option per completed run
+at every single tier — even pricier than the cheap 4080 tier:
+
+| Tier (budget) | RTX 4080 | RTX 5090 | RTX PRO 6000 |
+|---|---|---|---|
+| S (75M tok) | $0.026 | $0.015 | $0.029 |
+| M (1B tok) | $0.956 | $0.591 | $1.024 |
+| L (2.1B tok) | $3.431 | $2.112 | $3.458 |
+
+**Unexpected and more important: the "throughput regresses past the sweet spot" pattern (first
+seen on the 4080) reproduced cleanly on the PRO 6000 too, at every tier** — once tested properly.
+S-tier @512 climbs to 644,000 tok/s at micro_batch=128, then drops to 555,119 (mb=256) and
+537,031 (mb=512) before a real OOM at mb=1024. Same shape as the 4080's curve, just ~3.3x higher.
+**This means the earlier finding "the 5090 doesn't show this regression" (from the RTX 5090
+comparison section above) was based on an incomplete test, not a real hardware difference.** The
+5090 sweep used a hard `--max-micro-batch 128` cap AND left early-stopping active — a more
+conservative methodology than this PRO 6000 run's "push to real OOM" approach. Concrete evidence:
+the 5090's M-tier@512 sweep stopped at micro_batch=64 (214,834 tok/s) because that was ~0.6%
+below micro_batch=32's 216,199 (triggering the "plateaued" early-stop) — but PRO 6000's uncapped
+sweep of the same tier/seq_len kept rising well past that exact point, all the way to a true peak
+of 246,864 at the same mb=64. So the 5090's recorded M/L-tier numbers are probably a **lower
+bound**, not its true ceiling — worth a same-methodology re-test if a precise number matters, but
+it doesn't change the qualitative ranking: PRO 6000 already loses on cost even against the 5090's
+conservative numbers, so a corrected (higher) 5090 number only strengthens "5090 is the best
+value" further. (S-tier's 5090 numbers are probably fine as-is — PRO 6000's true S-tier peaks
+landed at the *exact same* micro-batch as the 5090's capped sweep reported: 128/64/32 at
+512/1024/2048 — the cap happened to sit right at the natural optimum for that tier.)
+
+**Lesson for next time:** when comparing hardware, use the *identical* sweep methodology for
+every candidate. A partial measurement isn't just "less complete" than a full one — it can
+actively mislead a comparison if the gap between "how far GPU A was pushed" and "how far GPU B
+was pushed" isn't the same. Measuring beats assuming, but measuring *inconsistently* across a
+comparison can reintroduce the same error in a subtler form.
+
+**The tokens-per-step sweet-spot constant (from the seq_len-scaling section above) held up even
+more cleanly here**, now confirmed across 5 seq_lengths instead of 3: S-tier's constant is
+~65,536 (matching the 5090 exactly); M-tier settles at ~32,768 (a cleaner number than either
+other GPU alone showed); **L-tier's constant is ~16,384 tokens/step across all five tested
+lengths (512 through 8192) without a single exception** — the strongest confirmation of this
+pattern across the whole investigation.
+
+## The corrected 5090 re-test — the user's hunch was right about something real
+
+After the PRO 6000 test exposed the methodology gap, the natural next question (raised by the
+user, not assumed) was: "maybe PRO 6000 only pulls ahead at longer context — the short-sequence
+tests wouldn't have shown that." That's a genuinely different, falsifiable hypothesis from "the
+5090 numbers were just undertested" — so it needed its own check, not just a re-run with better
+settings. Re-ran the 5090 with the identical extreme methodology used for PRO 6000 (every sweep
+to real OOM) and compared throughput at matching tier/seq_len pairs:
+
+| Tier | seq=512 | seq=1024 | seq=2048 | seq=4096 | seq=8192 |
+|---|---|---|---|---|---|
+| S | PRO6000 +2.2% | +6.3% | +6.4% | +11.6% | +19.1% |
+| M | +14.4% | +16.2% | +17.5% | +20.5% | +25.2% |
+| L | +20.4% | +21.5% | +23.3% | +25.9% | +30.3% |
+
+**The hypothesis was confirmed, cleanly, at every tier: PRO 6000's throughput edge over the 5090
+grows monotonically with sequence length.** Best explanation: memory bandwidth. Longer sequences
+push proportionally more memory traffic per token through attention, and PRO 6000 — a larger,
+more complete Blackwell die built for workstation/datacenter use — most plausibly has higher
+memory bandwidth than the consumer-tier 5090. This is a real architectural difference, not
+measurement noise (it's monotonic and consistent across all three model sizes).
+
+**But — and this is the part worth internalizing — a real architectural advantage doesn't
+automatically translate into a real cost advantage.** Even at the widest gap measured (L-tier @
+8192, PRO 6000 30.3% faster), the cost still favors the 5090: $3.14 vs $4.77 for the L-tier hero
+budget. PRO 6000's ~98% price premium is a bigger number than its largest measured speed
+advantage (30.3%) at every combination tested. **The practical recommendation doesn't change —
+RTX 5090 remains the right default — but now that's backed by a real long-context data point,
+not an assumption that short-sequence results generalize.**
+
+One more thing this re-test caught: the "sweet-spot tokens-per-step is one sharp constant"
+framing (from the seq_len-scaling section above) turns out to oversimplify the 5090 specifically
+— its S-tier peak is a **broad, flat plateau** (several micro-batches from ~32,768 to ~65,536
+tokens/step all within ~1% of each other) rather than one clear winner, unlike the 4080's and
+PRO 6000's sharper single-point peaks. The L-tier constant (16,384 tokens/step) still held
+cleanly and identically on both GPUs across all 5 seq_lens — so the finding is solid where it
+matters most (the tier that'll actually get used for real runs), just noisier at the small-model
+end where measurement noise is a bigger fraction of the signal.
+
+**The meta-lesson, worth carrying forward:** the user's pushback here wasn't "I don't trust your
+numbers" — it was a specific, falsifiable alternative hypothesis ("maybe it's a long-context
+effect specifically"), which is exactly the kind of question that's worth an actual test rather
+than a confident-sounding guess either way. It turned out to be right. Good instinct to keep
+having.
+
 ## Loose end for a future session (not fixed today, just flagged)
 
 `GPT.forward()` hard-rejects any sequence longer than `model_config.max_seq_len` — phase 5 Wave

@@ -938,4 +938,134 @@ training run on the 5090 shows throughput meaningfully different from these fwd+
 numbers (same caveat as D-030 — only S-tier has a real-training calibration point so far, from
 the 4080; worth a real 5090 smoke-test run before fully trusting the M/L projections).
 
-<!-- Append new decisions below. Next ID: D-033 -->
+## D-033 — RTX PRO 6000 extreme-capacity test: confirms D-018's "not worth it" prediction, AND reveals the 5090 comparison (D-032) used an inconsistent, likely-truncated sweep methodology  (2026-07-12, RW-3)
+**Decision:** At the user's explicit request ("test it to the extreme with custom
+configurations"), ran a 15-sweep matrix (3 tiers × 5 seq_lens: 512/1024/2048/4096/8192, vs the
+prior 3-seq_len matrices) on a rented RTX PRO 6000 ($0.91/hr, 96GB VRAM), with early-stopping
+disabled (`--plateau-tolerance -1`) and a high micro-batch ceiling (`--max-micro-batch 4096`) so
+every sweep ran to a **real CUDA OOM**, not an early-stop heuristic or an arbitrary cap. All 120
+raw data points appended to `docs/results/cloud_gpu_benchmarks.csv` (233 rows total across all
+three GPUs now — full methodology and per-point data, not just sweet-spot summaries).
+
+**Finding 1 (expected, now confirmed empirically): RTX PRO 6000 is not worth it for this
+project's model sizes, exactly as D-018 predicted from VRAM-need reasoning alone.** Despite
+having higher raw sweet-spot tok/s than the 5090 at every tier (S: 644,000 vs 627,326; M:
+246,864 vs 216,199; L: 153,490 vs 127,033), its $0.91/hr rate (~2x the 5090's $0.46/hr) more than
+cancels the throughput edge:
+
+| Tier (budget) | RTX 4080 | RTX 5090 | RTX PRO 6000 |
+|---|---|---|---|
+| S (75M tok) | $0.026 | $0.015 | $0.029 |
+| M (1B tok) | $0.956 | $0.591 | $1.024 |
+| L (2.1B tok) | $3.431 | $2.112 | $3.458 |
+
+RTX PRO 6000 is the *most expensive* option at every tier — worse than even the 4080 dry-run
+tier. Its 96GB VRAM buys nothing our ~10-105M-param models can use (matches D-018/D-032's
+VRAM-need math directly, now with a real measurement instead of just reasoning about it).
+
+**Finding 2 (unexpected, and more important): the throughput-regression-past-sweet-spot pattern
+(first seen on the RTX 4080, D-030) is NOT a 4080-specific quirk — it reproduced cleanly on the
+RTX PRO 6000 too, at every tier**, once tested with the same extreme (no-early-stop, high-ceiling)
+methodology. Example, S-tier @512: climbs to 644,000 tok/s at micro_batch=128, then regresses to
+555,119 (mb=256) and 537,031 (mb=512) before OOM at 1024 — the same shape as the 4080's curve,
+just at a ~3.3x higher absolute ceiling. M-tier and L-tier show the identical shape.
+
+**This means D-032's "the 5090 doesn't show this regression" conclusion was premature — not
+wrong about the 5090's superiority, but based on an incomplete test.** The 5090 sweep (same
+session, prior turn) used `--max-micro-batch 128` (a hard cap) WITHOUT `--plateau-tolerance -1`
+(so early-stopping was still active) — a materially different, more conservative methodology than
+this RTX PRO 6000 run. Concretely: the 5090's M-tier@512 sweep stopped at micro_batch=64
+(214,834 tok/s, interpreted as "plateaued" since it's ~0.6% below mb=32's 216,199) — but the RTX
+PRO 6000's *un-capped, non-early-stopping* sweep of the same tier/seq_len kept climbing well past
+that point, to a true peak of 246,864 at mb=64 before regressing. The 5090's recorded numbers are
+therefore **likely a lower bound**, not its true ceiling, for the M/L tiers specifically (S-tier's
+5090 numbers are probably fine — the RTX PRO 6000's true S-tier peaks landed at the *exact same*
+micro-batch values the 5090's capped sweep reported: 128/64/32 at 512/1024/2048).
+
+**Practical implication:** this doesn't change the qualitative conclusion (5090 still the best
+value once available) — if anything, a fair re-test would likely make the 5090's numbers *better*,
+strengthening that conclusion further, since RTX PRO 6000 already loses on cost even using the
+5090's conservative/underestimated figures. But the exact 5090 M/L-tier cost numbers in D-032
+should be treated as upper-bound cost estimates (i.e., real cost is probably a bit lower), not
+final numbers, until re-tested with this same extreme methodology.
+
+**Tokens-per-step sweet-spot constant (D-031's finding) held cleanly on RTX PRO 6000 too**, now
+confirmed across 5 seq_lens instead of 3: S-tier ~65,536 tokens/step (matches the 5090's number
+exactly); M-tier ~32,768 (a new, cleaner data point than either other GPU had shown); L-tier
+~16,384, consistent across all five tested seq_lengths (512 through 8192) without exception —
+the cleanest confirmation of this pattern yet.
+
+**Options considered:** trust the RTX PRO 6000 for future big-model headroom on VRAM alone
+(rejected — this project's models are nowhere near VRAM-bound at any tier through L, D-018);
+skip re-testing after finding the 4080-style regression (rejected — the point of "extreme"
+testing was exactly to check whether earlier conclusions held up under harder conditions, and
+they didn't fully).
+**Why this matters:** a repeat of this project's core lesson (D-008, D-018, D-022, D-023,
+D-029) — measuring beats assuming, AND a partial measurement can itself mislead if the test
+conditions differ between comparison points. The fix wasn't "measure once" but "measure the same
+way every time you compare."
+**Impacts:** `docs/results/cloud_gpu_benchmarks.csv` now has all three GPUs' full sweep data
+(233 rows). `docs/learnings/20260712_gpuhub-rtx4080-capacity.md` to be extended with this
+section. `docs/CLOUD_GPUHUB.md` §10 to get a 3-way table. RTX PRO 6000 confirmed NOT recommended
+for this project going forward — RW-3/CLOUD_GPUHUB.md should default to RTX 5090, matching
+D-032, with RTX PRO 6000 noted as tested-and-ruled-out rather than untested.
+**Revisit if:** a future phase's model size actually becomes VRAM-bound (would need to be far
+beyond L-tier's 105M params) — re-open RTX PRO 6000 as an option then. Also revisit the exact
+5090 M/L-tier cost figures if/when a same-methodology 5090 re-test happens (optional, cheap,
+offered to the user but not yet done as of this entry).
+
+## D-034 — Same-methodology RTX 5090 re-test: user's architectural hypothesis confirmed (PRO 6000's edge grows with sequence length) but doesn't flip the cost conclusion  (2026-07-12, RW-3)
+**Decision:** Re-ran the RTX 5090 with the exact same "extreme" methodology as D-033's RTX PRO
+6000 test (`--plateau-tolerance -1`, `--max-micro-batch 4096`, every sweep run to real OOM) —
+closing the methodology gap D-033 flagged. 90 new rows appended to
+`docs/results/cloud_gpu_benchmarks.csv` (tagged `sweep_extreme` to distinguish from the earlier,
+more conservative `sweep` source for the same GPU — both kept for the record, not overwritten).
+
+**User's hypothesis going in: "maybe PRO 6000 only shows an advantage at longer context (2048-
+4096+), not at short sequences" — confirmed, with real numbers.** PRO 6000's throughput
+advantage over the 5090 grows monotonically with sequence length at every tier tested:
+
+| Tier | seq=512 | seq=1024 | seq=2048 | seq=4096 | seq=8192 |
+|---|---|---|---|---|---|
+| S | +2.2% | +6.3% | +6.4% | +11.6% | +19.1% |
+| M | +14.4% | +16.2% | +17.5% | +20.5% | +25.2% |
+| L | +20.4% | +21.5% | +23.3% | +25.9% | +30.3% |
+
+(% = how much faster PRO 6000's sweet-spot tok/s is than the 5090's, same tier/seq_len, both now
+measured with identical extreme methodology.) This is very likely a **memory-bandwidth** effect:
+longer sequences push more memory traffic per token through attention, and PRO 6000 (a bigger,
+more complete Blackwell die than the consumer 5090) most plausibly has higher memory bandwidth —
+a real architectural difference, not a measurement artifact, and directionally exactly what the
+user predicted.
+
+**But this does NOT flip the cost recommendation at this project's current model sizes.** Even at
+the widest tested gap (L-tier @ seq_len=8192, PRO 6000 30.3% faster), the cost math still favors
+the 5090: $3.14 (5090, 6.83hr) vs $4.77 (PRO 6000, 5.24hr) for the L-tier hero-run token budget.
+PRO 6000's price premium (~98% more per hour) still exceeds its largest measured throughput
+edge (30.3%) at every tier/seq_len combination tested. **RTX 5090 remains the right default.**
+
+**Corrected/superseded numbers from D-032/D-033:** the extreme-methodology 5090 re-test also
+revealed the earlier "sweet-spot tokens-per-step is a single sharp constant" framing (D-031)
+oversimplifies the 5090 specifically — its S-tier peak is a **broad, flat plateau** (roughly
+32,768-65,536 tokens/step, several candidate micro-batches within ~1% of each other) rather than
+one sharp winner, unlike the 4080's and PRO 6000's noticeably sharper single-point peaks. L-tier's
+constant (16,384 tokens/step) held cleanly and identically on both the 5090 and PRO 6000 across
+all 5 seq_lens, though — the "constant tokens/step" finding is solid at L-tier, just noisier
+right at the S-tier peak specifically.
+**Options considered:** trust the D-033 flag that 5090 numbers were "a lower bound" without
+re-testing (rejected — user explicitly asked to finish the extreme test, and the corrected
+numbers matter for the specific architectural question raised); conclude PRO 6000 is worth it at
+long context (rejected — cost math still favors 5090 even at the widest measured gap).
+**Why this matters:** validates that pushing back on a measurement's completeness (as the user
+did) is exactly the right instinct — the correction was real, not just methodological pedantry,
+and it answered a genuine architectural question with real numbers instead of speculation.
+**Impacts:** `docs/results/cloud_gpu_benchmarks.csv` now has 324 rows (all three GPUs, both 5090
+methodologies preserved for the record). `docs/learnings/20260712_gpuhub-rtx4080-capacity.md`
+and `docs/CLOUD_GPUHUB.md` §10 to be updated with the corrected numbers and the growing-gap
+finding.
+**Revisit if:** a future model size or context-length requirement pushes PRO 6000's throughput
+edge past its ~98% price premium — extrapolating the L-tier trend (20.4%→30.3% over 512→8192),
+that crossover looks far beyond any context length this project currently plans to use, but
+worth re-checking if that assumption changes.
+
+<!-- Append new decisions below. Next ID: D-035 -->
