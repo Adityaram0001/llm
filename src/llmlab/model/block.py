@@ -27,11 +27,17 @@ class Block(nn.Module):
         self.ffn_norm = make_norm(cfg.norm, cfg.d_model)
         self.ffn = make_ffn(cfg.ffn, cfg.d_model, cfg.ffn_mult, cfg.dropout)
 
-    def forward(self, x: torch.Tensor, attn_bias: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        attn_bias: torch.Tensor | None = None,
+        cache=None,
+    ) -> torch.Tensor:
+        """`cache`: optional per-layer KV cache (incremental decode); None = full-sequence path."""
         if self.norm_position == "pre":
-            x = x + self.attn(self.attn_norm(x), attn_bias)
+            x = x + self.attn(self.attn_norm(x), attn_bias, cache)
             x = x + self.ffn(self.ffn_norm(x))
         else:
-            x = self.attn_norm(x + self.attn(x, attn_bias))
+            x = self.attn_norm(x + self.attn(x, attn_bias, cache))
             x = self.ffn_norm(x + self.ffn(x))
         return x

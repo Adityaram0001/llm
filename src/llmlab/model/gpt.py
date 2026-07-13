@@ -110,15 +110,27 @@ class GPT(nn.Module):
     # -- forward -------------------------------------------------------------
 
     def forward(
-        self, idx: torch.Tensor, targets: torch.Tensor | None = None
+        self,
+        idx: torch.Tensor,
+        targets: torch.Tensor | None = None,
+        caches: list | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """`caches`: optional list of per-layer KV caches for incremental decode (one per block).
+        Cached decode is only wired for on-the-fly position encodings (rope / alibi-free / MLA);
+        with a cache the token positions are offset by the cache length."""
         B, T = idx.shape
-        if T > self.cfg.max_seq_len and self.cfg.pos_encoding in ("learned", "sinusoidal"):
+        past_len = caches[0].seq_len if caches is not None else 0
+        if (
+            T + past_len > self.cfg.max_seq_len
+            and self.cfg.pos_encoding in ("learned", "sinusoidal")
+        ):
             # Only these two are physically bounded by max_seq_len (fixed-size lookup
-            # table/precomputed pe table). RoPE/ALiBi/none derive position info on the fly per
+            # table/precomputed pe table). RoPE/ALiBi/none/MLA derive position info on the fly per
             # forward call, so they can run at any T -- that's exactly what makes the phase-5
             # Wave B length-extrapolation probe (train@512, eval ppl@1024/2048) possible (RW-5).
-            raise ValueError(f"sequence length {T} exceeds max_seq_len {self.cfg.max_seq_len}")
+            raise ValueError(f"sequence length {T + past_len} exceeds max_seq_len {self.cfg.max_seq_len}")
+        if caches is not None and self.pos_emb is not None:
+            raise ValueError("cached decode is not supported for learned/sinusoidal encodings")
 
         x = self.tok_emb(idx)
         if self.pos_emb is not None:
@@ -127,10 +139,12 @@ class GPT(nn.Module):
 
         attn_bias = None
         if self.cfg.pos_encoding == "alibi":
+            if caches is not None:
+                raise ValueError("cached decode is not supported for ALiBi")
             attn_bias = build_alibi_bias(self.cfg.n_heads, T, idx.device)
 
-        for block in self.blocks:
-            x = block(x, attn_bias)
+        for i, block in enumerate(self.blocks):
+            x = block(x, attn_bias, None if caches is None else caches[i])
         x = self.final_norm(x)
         logits = self.lm_head(x)
 
@@ -151,15 +165,31 @@ class GPT(nn.Module):
         temperature: float = 1.0,
         top_k: int | None = None,
         top_p: float | None = None,
+        use_cache: bool = True,
     ) -> torch.Tensor:
         """Autoregressive sampling. `top_k`: keep only the k highest-probability tokens.
         `top_p` (nucleus, Holtzman et al. '19): keep the smallest set of tokens whose
-        cumulative probability >= top_p. Both, if set, apply on top of temperature scaling."""
+        cumulative probability >= top_p. Both, if set, apply on top of temperature scaling.
+
+        `use_cache=True` prefills the prompt once then feeds ONE new token per step against a
+        per-layer KV cache (the O(1)-per-step decode that MQA/GQA/MLA optimize the memory of);
+        `use_cache=False` falls back to re-running the whole prefix each step (correct but O(T)),
+        used mainly by learned/sinusoidal/alibi configs the cache path doesn't cover."""
+        from .attention import make_cache
+
         was_training = self.training
         self.eval()
-        for _ in range(max_new_tokens):
-            idx_cond = idx[:, -self.cfg.max_seq_len :]
-            logits, _ = self(idx_cond)
+        caches = None
+        if use_cache and self.pos_emb is None and self.cfg.pos_encoding != "alibi":
+            caches = [make_cache(self.cfg) for _ in range(self.cfg.n_layers)]
+        for step in range(max_new_tokens):
+            if caches is not None:
+                # prefill the whole prompt on step 0, then only the last token each step
+                idx_cond = idx if step == 0 else idx[:, -1:]
+                logits, _ = self(idx_cond, caches=caches)
+            else:
+                idx_cond = idx[:, -self.cfg.max_seq_len :]
+                logits, _ = self(idx_cond)
             logits = logits[:, -1, :] / temperature
 
             if top_k is not None:

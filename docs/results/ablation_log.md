@@ -34,3 +34,28 @@ length-extrapolation probe. Figure: `docs/results/wave_b_positional_encodings.pn
   contender**, especially for any future long-context need (RW-5's phase-9 capstone chat-context
   goal) — its extrapolation behavior is strictly better than RoPE's at this scale. Learned/
   sinusoidal/NoPE are all worse choices for this project, ruled out.
+
+## Wave C — Attention variants (2026-07-13)
+
+Control: `20260713_p5_s-wave-c-mha` — plain MHA at **n_heads=4** (NOT the 3-head
+`p4_s_baseline`; GQA-2 is undefined at 3 heads, so the whole wave runs at 4 heads). Noise floor:
+0.0150 (D-035). Figures: `docs/results/wave_c_attention_variants.png` (curves + cache-vs-quality
+tradeoff), cache/tok-s data in `docs/results/wave_c_inference_bench.csv`, mechanism walkthrough in
+`notebooks/06_mla_explained.ipynb`. New code: `MLAAttention` (DeepSeek-V2 §2), incremental
+KV-cache decode for all 4 variants (`kv_cache.py`, rewritten `generate()`), `bench_inference.py`.
+- **Quality is nearly flat across all four** (val 3.5107–3.5498, spread 0.039 ≈ 2.6× the noise
+  floor): at S-tier/98M tokens the attention *type* barely moves loss. So judge on **cache**.
+- **GQA-2:** −0.0205 vs MHA (real, marginally better) at **2× smaller** cache (512 vs 1024
+  B/tok/layer). Halving KV heads is free on quality — why GQA is the industry default.
+- **MQA:** +0.0186 vs MHA (real, the ONLY quality loss) but **4× smaller** cache (256 B). The
+  quality-vs-cache extreme: cheapest cache, first to cost quality.
+- **MLA:** −0.0166 vs MHA (real, marginally better) at **3.2× smaller** cache (320 B) — smallest
+  cache among the quality-*preserving* variants. Reproduces DeepSeek-V2's headline at 10M params:
+  near-MQA cache, near-MHA quality, by rebuilding all 4 content heads from a low-rank latent +
+  decoupled RoPE key. Trade: ~25% slower decode/token at this scale (extra projections, no
+  absorption trick) — cache win is memory, not single-stream latency here.
+- **Verdict for phase 9's recipe:** MHA's full cache buys nothing at this scale. Default to
+  **GQA** for simplicity (2× cache cut, zero quality cost, trivial code), and reach for **MLA**
+  when KV-cache memory is the binding constraint (long context / large batch), accepting its
+  decode-compute overhead (which absorption + a pre-allocated cache would remove). MQA only if
+  cache is the single overriding constraint and a small quality hit is acceptable.

@@ -1,0 +1,29 @@
+# Wave C: GQA (2 KV groups) vs the n_heads=4 MHA control. Single variable: n_kv_heads.
+# Wave C studies attention *type* holding head geometry fixed; GQA "2 groups" needs n_heads
+# divisible by 2, impossible at the baseline's n_heads=3. So the whole wave runs at n_heads=4,
+# head_dim=64 (attn inner dim 256, o_proj 256->192), and THIS run is the wave's reference.
+# KV cache/token (bf16) = 2 * n_kv_heads * head_dim * 2B = 2*4*64*2 = 1024 B.  (D-038)
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 4
+n_kv_heads: 2        # 2 KV groups -> GQA (Ainslie et al. 23). cache/tok = 2*2*64*2 = 512 B
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2

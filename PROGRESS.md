@@ -5,12 +5,31 @@
 
 **Active phase:** Phase 4 is **done** (milestone M1 declared). Phase 5
 (`docs/phases/phase5_ablations.md`) is **in-progress**: seed-noise study done (D-035), **Wave A
-done (D-036)**, **Wave B done (D-037)**. **Wave C (attention variants: MHA/MQA/GQA/MLA) is
-next** — the spec flags MLA as "the hardest implementation of the project," needing a full
-session (DeepSeek-V2 §2 KV low-rank compression + decoupled RoPE keys, plus
-`notebooks/06_mla_explained.ipynb`'s matrix diagrams). Start Wave C fresh, don't try to squeeze
-it into a session that's already done other work.
-**Last session:** 2026-07-11 evening through 2026-07-12 — built the whole training engine
+done (D-036)**, **Wave B done (D-037)**, **Wave C done (D-038)**. **Wave D (optimizers &
+schedules: AdamW sweeps, Lion, Muon, cosine/WSD/constant, z-loss, batch-size study, grad-clip-off
+spike demo) is next** — flagship #2, Muon's Newton–Schulz orthogonalization is the main new
+implementation. Waves A–D done = the M2 milestone (only Wave D left for it).
+**Last session (2026-07-13, Wave C):** implemented **MLA** (`MLAAttention`, DeepSeek-V2 §2) + a
+full **incremental KV-cache decode path** for all 4 attention variants (new
+`src/llmlab/model/kv_cache.py`; `cache=` threaded through attention/block/gpt; `generate()`
+rewritten prefill-once-then-1-tok/step — cached decode bit-exact vs full forward on cpu/mps/cuda).
+Ran the 4-run Wave C ablation on the RTX 5090 (~50 min, singapore-b:25864). **Result (D-038):
+quality is flat across MHA/GQA/MQA/MLA (spread 0.039 ≈ 2.6× the noise floor) — so cache decides.**
+GQA-2 (−0.0205, 2× smaller cache) and MLA (−0.0166, 3.2× smaller) both marginally beat the MHA
+control; MQA is the only real quality loss (+0.0186) but smallest cache. **MLA reproduces
+DeepSeek-V2's headline at 10M params** (near-MQA cache, near-MHA quality). Honest tok/s caveat:
+at this scale decode is launch-overhead-bound so the cache doesn't speed latency and MLA is ~25%
+slower/tok (no absorption trick) — cache win is memory not latency. New: `MLAAttention`,
+`kv_cache.py`, `scripts/bench_inference.py`, `scripts/plot_wave_c.py`,
+`notebooks/06_mla_explained.ipynb` (matrix diagrams, executes clean), 4 model + 4 train configs,
+`configs/model_s_attn_*` / `train_s_wave_c_*`, +10 tests (82 pass). Figures:
+`docs/results/wave_c_attention_variants.png`, `docs/results/wave_c_inference_bench.csv`.
+**GPU LEFT RUNNING — user must stop the singapore-b:25864 instance to stop billing** (checkpoints
+for the 4 runs are still on it if ever needed; nothing else pending there). Important design note
+carried into DECISIONS: the wave runs at **n_heads=4** (GQA-2 undefined at the baseline's 3
+heads), so `20260713_p5_s-wave-c-mha` is the wave's control, not `p4_s_baseline`.
+
+**Earlier — 2026-07-11 evening through 2026-07-12** — built the whole training engine
 (deliverables 0b, 1, 2, 3, 3b), ran the first real experiments including an unattended overnight
 lr-sweep + baseline pipeline, then reviewed the results.
 **Same-day update (2026-07-12, phase 5 start):** ran the phase-5 seed-noise study (2 more seeds
@@ -214,8 +233,12 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   `max_seq_len` guard now only applies to learned/sinusoidal, not rope/alibi/none — see
   `src/llmlab/model/gpt.py`, `tests/test_model.py`, new `scripts/eval_extrapolation.py`. Figure:
   `docs/results/wave_b_positional_encodings.png`.
-- [ ] Wave C — Attention variants (MHA/MQA/GQA/MLA) + KV-cache-bytes + gen tok/s — MLA needs a
-  full session, `notebooks/06_mla_explained.ipynb`
+- [x] Wave C — Attention variants (MHA/MQA/GQA/MLA) + KV-cache-bytes + gen tok/s (D-038): quality
+  flat across all 4 (spread 0.039 ≈ 2.6× noise floor) → cache decides; GQA-2 −0.0205 @2× smaller
+  cache, MLA −0.0166 @3.2× smaller (reproduces DeepSeek-V2), MQA +0.0186 @4× smaller (only real
+  quality loss). MLA + incremental KV-cache decode implemented & tested (bit-exact cpu/mps/cuda);
+  `notebooks/06_mla_explained.ipynb` + `scripts/bench_inference.py` done. Honest caveat: at 10M
+  params decode is launch-bound so cache ≠ speed, MLA ~25% slower/tok (no absorption trick).
 - [ ] Wave D — Optimizers & schedules (AdamW sweeps, Lion, Muon, cosine/WSD/constant, z-loss,
   batch-size study, grad-clip-off spike demo)
 - [ ] Wave E — Efficiency & memory (bf16 vs fp32, grad checkpointing, micro-batch/accum

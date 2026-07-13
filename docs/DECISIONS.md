@@ -1223,4 +1223,83 @@ re-run this same probe at M/L tier before trusting these S-tier-only numbers at 
 were tuned around RoPE, not sinusoidal, and might not be a fair comparison at a different lr/
 schedule).
 
-<!-- Append new decisions below. Next ID: D-038 -->
+## D-038 — Wave C (attention variants) complete + MLA implemented: quality is flat across MHA/GQA/MQA/MLA, so cache size decides; MLA reproduces DeepSeek-V2's "small cache, kept quality" at 10M params (2026-07-13, phase 5)
+**Decision:** Implemented **Multi-head Latent Attention** (`MLAAttention`, DeepSeek-V2 §2) plus a
+full **incremental KV-cache decode path** for all four attention variants, then ran the Wave C
+ablation (`docs/phases/phase5_ablations.md`) on the RTX 5090 gpuhub instance (same
+`remote.env` host as Waves A/B — singapore-b:25864, re-provisioned from the "genesis" image).
+
+**Two design decisions made before running (the user's calls, surfaced at session start):**
+1. **MLA sizing = head-dim-preserving** (not DeepSeek-faithful proportions): per-head Q/K =
+   `nope_head_dim 32 + rope_head_dim 32 = 64` (== the baseline `head_dim`), `v_head_dim 64`,
+   `kv_lora_rank 128`, `q_lora_rank 192`. Keeps head geometry identical to MHA for the fairest
+   quality comparison; cache/token = `(128+32)·2B = 320 B/tok/layer`. Extended `MLAConfig` with
+   `nope_head_dim`/`v_head_dim` (were missing).
+2. **Full incremental KV-cache decode path** (not analytical-only): new `src/llmlab/model/
+   kv_cache.py` (`KVCache` for MHA/GQA/MQA, `MLACache` for the latent+shared-rope-key), `cache=`
+   threaded through `Attention`/`MLAAttention`/`Block`/`GPT.forward`, and `GPT.generate()`
+   rewritten to prefill-once-then-1-token/step. Reusable for phase 8/9 chat. Cached decode is
+   verified bit-exact vs full-sequence forward on cpu/mps/**cuda** (maxdiff ~1e-7,
+   `test_cached_decode_matches_full_forward`).
+
+**Forced implementation constraint (not a preference):** GQA "2 groups" is undefined at the
+baseline's `n_heads=3` (3 ∤ 2), so the **entire wave runs at `n_heads=4, head_dim=64`** and the
+**4-head MHA run (`20260713_p5_s-wave-c-mha`) is the wave's internal control**, NOT the 3-head
+`p4_s_baseline`. All four variants share the 4-head geometry, so each gqa2/mqa/mla comparison is
+single-variable.
+
+**Results (val_loss @ 98.3M tokens, seed 1337, same harness as A/B; noise floor 0.0150 D-035):**
+| variant | val_loss | Δ vs MHA control | cache B/tok/layer | vs MHA |
+|---|---|---|---|---|
+| GQA-2 | 3.5107 | −0.0205 | 512 | 2.0× smaller |
+| MLA | 3.5146 | −0.0166 | 320 | 3.2× smaller |
+| MHA (control) | 3.5312 | — | 1024 | — |
+| MQA | 3.5498 | +0.0186 | 256 | 4.0× smaller |
+
+**Reading:** quality is **nearly flat** (spread 0.039 ≈ 2.6× the noise floor) — at S-tier/98M
+tokens the attention *type* barely moves loss, so the decision is made on **cache**. GQA-2 and
+MLA both marginally *beat* MHA (each just past the noise floor) while cutting cache 2–3.2×; MQA is
+the only real quality *loss* (+0.0186) but has the smallest cache. **MLA is the Pareto-interesting
+point:** it dominates MHA (smaller cache, equal-or-better quality) and matches GQA's quality at a
+smaller cache — a clean small-scale reproduction of DeepSeek-V2's central claim.
+
+**KV-cache bytes measured analytically AND empirically** (`scripts/bench_inference.py` on the
+5090, bf16) — empirical == analytical exactly (`docs/results/wave_c_inference_bench.csv`). **The
+honest tok/s finding:** at 10M params single-stream decode is launch-overhead-bound, so the naive
+`torch.cat` cache does NOT speed up latency vs full recompute, and MLA decodes ~25% slower/token
+than MHA (extra down/up projections; we skipped the "weight absorption" trick and pre-allocated
+cache — both noted in `notebooks/06_mla_explained.ipynb` §4). MLA buys cache *memory* with
+*compute*; at this scale the payoff is memory (→ larger batch/longer context), not latency.
+
+**Options considered:** (a) DeepSeek-faithful MLA proportions (nope 64 > v 64 > rope 32) —
+rejected in favor of head-dim-preserving for a fair quality comparison; (b) analytical-only cache
+measurement — rejected, the incremental decode path is needed for a real bytes/tok-s measurement
+AND is reused in phase 8/9; (c) keep `n_heads=3` and drop GQA — rejected, GQA is a core Wave C
+technique, so the 4-head wave with its own MHA control is the correct single-variable design.
+
+**Why this matters:** Wave C is DeepSeek flagship #1 and the hardest implementation of the
+project; MLA + the KV-cache path are now real, tested code the capstone can use. The verdict feeds
+phase 9's recipe: MHA's full cache buys nothing at this scale.
+
+**Verdict for phase 9's recipe:** default to **GQA** (2× cache cut, zero quality cost, trivial
+code); reach for **MLA** when KV-cache memory is the binding constraint (long context / large
+batch), accepting the decode-compute overhead that absorption + a pre-allocated cache would
+remove; **MQA** only if cache is the single overriding constraint and a small quality hit is OK.
+
+**Impacts:** `src/llmlab/model/config.py` (`MLAConfig` +nope/v dims), `attention.py`
+(`MLAAttention`, `make_cache`, cached `Attention`), `kv_cache.py` (new), `block.py`/`gpt.py`
+(cache threading, rewritten `generate`), `positional.py` (`RotaryEmbedding` offset),
+`tests/test_model.py` (MLA + KV-cache tests, 82 pass), `scripts/bench_inference.py` +
+`scripts/plot_wave_c.py` (new), `configs/model_s_attn_{mha,gqa2,mqa,mla}.yaml` +
+`configs/train_s_wave_c_{...}.yaml` (new), `notebooks/06_mla_explained.ipynb` (new),
+`experiments/20260713_p5_s-wave-c-{mha,gqa2,mqa,mla}/` (4 runs, config+metrics+samples+notes;
+checkpoints stayed on the remote), `experiments/registry.csv` (4 rows),
+`docs/results/wave_c_attention_variants.png`, `docs/results/wave_c_inference_bench.csv`,
+`docs/results/ablation_log.md`.
+
+**Revisit if:** the phase-9 capstone needs the KV-cache decision at M/L tier — re-run the bench
+there (bytes/token scales with n_layers·d, and the MLA-vs-GQA quality gap may open or close at
+larger scale/longer training). If MLA is chosen for the capstone, implement weight absorption +
+pre-allocated cache first (this session's decode path is correct but not throughput-optimized).
+
+<!-- Append new decisions below. Next ID: D-039 -->

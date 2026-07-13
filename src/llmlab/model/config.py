@@ -16,11 +16,21 @@ import yaml
 
 @dataclass
 class MLAConfig:
-    """Multi-head Latent Attention (DeepSeek-V2) — phase 5-C."""
+    """Multi-head Latent Attention (DeepSeek-V2 §2) — phase 5-C.
+
+    The KV cache stores only the compressed latent `c_kv` (`kv_lora_rank`) plus one shared
+    decoupled-RoPE key (`rope_head_dim`) per token — NOT per-head K and V. Per head, query/key
+    each split into a content part (`nope_head_dim`, position-free) and a decoupled RoPE part
+    (`rope_head_dim`); the value head is `v_head_dim`. Query is itself low-rank-compressed to
+    `q_lora_rank` (params only — queries aren't cached). Head-dim-preserving S-tier default:
+    nope=32, rope=32 → per-head Q/K dim 64 (== baseline head_dim), v=64.
+    """
 
     kv_lora_rank: int
     q_lora_rank: int
     rope_head_dim: int
+    nope_head_dim: int
+    v_head_dim: int
 
 
 @dataclass

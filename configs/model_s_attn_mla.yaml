@@ -1,0 +1,38 @@
+# Wave C: Multi-head Latent Attention (DeepSeek-V2 §2) vs the n_heads=4 MHA control.
+# Head-dim-preserving sizing (user decision): per-head Q/K = nope 32 + rope 32 = 64 (== MHA
+# head_dim), value = 64. Caches only the latent (kv_lora_rank=128) + one shared decoupled-RoPE
+# key (rope_head_dim=32): cache/tok = (128+32)*2 = 320 B — 3.2x smaller than MHA's 1024 B,
+# between MQA (256) and GQA (512), while keeping per-head V/O geometry identical to MHA. (D-038)
+# n_kv_heads is unused by MLA but kept == n_heads to satisfy ModelConfig's divisibility check.
+# pos_encoding=rope only tells the outer GPT "no additive pos-emb / no ALiBi bias"; MLA runs its
+# OWN decoupled RoPE internally (on the rope_head_dim slice), never the outer Attention.rotary.
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 4
+n_kv_heads: 4
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667
+
+attention: mla
+mla:
+  kv_lora_rank: 128
+  q_lora_rank: 192
+  rope_head_dim: 32
+  nope_head_dim: 32
+  v_head_dim: 64
+
+tie_embeddings: true
+init: gpt2

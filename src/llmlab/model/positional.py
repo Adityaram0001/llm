@@ -61,8 +61,12 @@ class RotaryEmbedding(nn.Module):
         inv_freq = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
-    def forward(self, seq_len: int, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-        positions = torch.arange(seq_len, device=device).float()
+    def forward(
+        self, seq_len: int, device: torch.device, offset: int = 0
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """`offset` shifts the absolute positions to `offset..offset+seq_len-1`, needed when
+        decoding token-by-token against a KV cache (the new token sits at position past_len)."""
+        positions = torch.arange(offset, offset + seq_len, device=device).float()
         freqs = torch.outer(positions, self.inv_freq.to(device))  # (seq_len, head_dim/2)
         freqs = torch.cat([freqs, freqs], dim=-1)  # (seq_len, head_dim)
         return freqs.cos(), freqs.sin()
