@@ -26,11 +26,22 @@ class DataSourceConfig:
 @dataclass
 class OptimConfig:
     lr: float
-    lr_min_ratio: float = 0.1  # cosine floor = lr * lr_min_ratio
+    lr_min_ratio: float = 0.1  # floor of the schedule = lr * lr_min_ratio
     warmup_steps: int = 100
     betas: tuple[float, float] = (0.9, 0.95)
     weight_decay: float = 0.1
     grad_clip: float = 1.0
+
+    # Wave D (phase 5): optimizer choice + hybrid-optimizer (Muon) knobs
+    optimizer: str = "adamw"  # adamw | lion | muon
+    muon_lr: float = 0.02  # Muon's own peak lr (only used when optimizer="muon")
+    muon_momentum: float = 0.95
+    muon_ns_steps: int = 5
+
+    # Wave D: lr schedule shape + z-loss
+    schedule: str = "cosine"  # cosine | wsd | constant
+    wsd_decay_ratio: float = 0.2  # last X fraction of steps decay to lr_min (schedule="wsd")
+    z_loss_weight: float = 0.0  # PaLM '22 z-loss coefficient; 0 disables
 
 
 @dataclass

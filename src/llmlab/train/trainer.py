@@ -36,6 +36,7 @@ from llmlab.model import GPT, ModelConfig
 from llmlab.utils import autocast_ctx, get_device, mem_stats, set_seed
 
 from .config import DataSourceConfig, TrainConfig
+from .optimizers import Lion, Muon
 
 ROOT = Path(__file__).resolve().parents[3]
 REGISTRY_PATH = ROOT / "experiments" / "registry.csv"
@@ -54,6 +55,23 @@ def _sources(cfgs: list[DataSourceConfig]) -> list[Source]:
     ]
 
 
+def _split_params_by_ndim(model: torch.nn.Module) -> tuple[list, list]:
+    """`(matrix_params, vector_params)` -- `matrix_params` are the 2D+ hidden weight matrices
+    (attention/FFN projections) that get weight decay under AdamW or are Muon-eligible;
+    `vector_params` are embeddings/norm gains (ndim<2, or named tok_emb/pos_emb), which get
+    neither weight decay nor Muon's orthogonalization (see `build_param_groups` and
+    `Trainer._build_optimizers`)."""
+    matrix, vector = [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if p.ndim < 2 or "tok_emb" in name or "pos_emb" in name:
+            vector.append(p)
+        else:
+            matrix.append(p)
+    return matrix, vector
+
+
 def build_param_groups(model: torch.nn.Module, weight_decay: float) -> list[dict]:
     """Two AdamW param groups: matrix weights get weight decay, everything else doesn't.
 
@@ -64,31 +82,53 @@ def build_param_groups(model: torch.nn.Module, weight_decay: float) -> list[dict
     data-starved) representation rather than regularizing it. This model has no biases
     (`bias=False` throughout), so in practice the no-decay group is exactly {tok_emb, norms}.
     """
-    decay, no_decay = [], []
-    for name, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if p.ndim < 2 or "tok_emb" in name or "pos_emb" in name:
-            no_decay.append(p)
-        else:
-            decay.append(p)
+    decay, no_decay = _split_params_by_ndim(model)
     return [
         {"params": decay, "weight_decay": weight_decay},
         {"params": no_decay, "weight_decay": 0.0},
     ]
 
 
-def lr_at_step(step: int, cfg: TrainConfig) -> float:
-    """Linear warmup -> cosine decay to `lr * lr_min_ratio`."""
+def _schedule_multiplier(step: int, cfg: TrainConfig) -> float:
+    """lr(step) / peak_lr, independent of which optimizer/peak-lr it's scaling -- lets the
+    Muon+AdamW hybrid apply the same warmup/decay *shape* to two different peak values
+    (`muon_lr`, `lr`) from one schedule definition. Three shapes (`OptimConfig.schedule`):
+    - cosine: warmup -> cosine decay to `lr_min_ratio` by `max_steps` (phase 4/5's default).
+    - constant: warmup -> flat at 1.0 for the rest of training (no decay at all).
+    - wsd (Hu et al. '24, MiniCPM): warmup -> flat at 1.0 ("stable") -> linear decay to
+      `lr_min_ratio` over the last `wsd_decay_ratio` fraction of steps. The point of WSD is that
+      the "stable" phase doesn't need to know the eventual total budget -- decay can start from
+      ANY checkpoint taken during it, producing a usable model at whatever budget you decide to
+      stop at (see the wave_d_wsd_branch_* configs/notes for a demonstration).
+    """
     o = cfg.optim
-    lr_min = o.lr * o.lr_min_ratio
     if step < o.warmup_steps:
-        return o.lr * (step + 1) / o.warmup_steps
-    if step >= cfg.max_steps:
-        return lr_min
-    progress = (step - o.warmup_steps) / max(1, cfg.max_steps - o.warmup_steps)
-    coeff = 0.5 * (1 + math.cos(math.pi * progress))
-    return lr_min + coeff * (o.lr - lr_min)
+        return (step + 1) / o.warmup_steps
+    if o.schedule == "constant":
+        return 1.0
+    if o.schedule == "cosine":
+        if step >= cfg.max_steps:
+            return o.lr_min_ratio
+        progress = (step - o.warmup_steps) / max(1, cfg.max_steps - o.warmup_steps)
+        coeff = 0.5 * (1 + math.cos(math.pi * progress))
+        return o.lr_min_ratio + coeff * (1 - o.lr_min_ratio)
+    if o.schedule == "wsd":
+        decay_start = cfg.max_steps * (1 - o.wsd_decay_ratio)
+        if step < decay_start:
+            return 1.0
+        if step >= cfg.max_steps:
+            return o.lr_min_ratio
+        progress = (step - decay_start) / max(1, cfg.max_steps - decay_start)
+        return 1.0 - progress * (1 - o.lr_min_ratio)
+    raise ValueError(f"unknown schedule {o.schedule!r}")
+
+
+def lr_at_step(step: int, cfg: TrainConfig, base_lr: float | None = None) -> float:
+    """`base_lr` defaults to `cfg.optim.lr`; the Muon+AdamW hybrid calls this twice per step
+    with `base_lr=cfg.optim.muon_lr` and `base_lr=cfg.optim.lr` to schedule both optimizers off
+    the same warmup/decay shape (see `_schedule_multiplier`)."""
+    base = cfg.optim.lr if base_lr is None else base_lr
+    return base * _schedule_multiplier(step, cfg)
 
 
 class Trainer:
@@ -104,11 +144,7 @@ class Trainer:
 
         model_cfg = ModelConfig.from_yaml(str(ROOT / cfg.model_config))
         self.model = GPT(model_cfg).to(self.device)
-        self.optimizer = torch.optim.AdamW(
-            build_param_groups(self.model, cfg.optim.weight_decay),
-            lr=cfg.optim.lr,
-            betas=cfg.optim.betas,
-        )
+        self.optimizers, self._base_lrs = self._build_optimizers()
 
         self.train_loader = MixedSourceLoader(_sources(cfg.sources), cfg.seq_len, cfg.seed)
         self.val_loader = MixedSourceLoader(_sources(cfg.val_sources), cfg.seq_len, cfg.seed + 1)
@@ -139,6 +175,37 @@ class Trainer:
         # `kill -INT <pid>` was ignored entirely until this line was added.
         signal.signal(signal.SIGINT, signal.default_int_handler)
 
+    # -- optimizer construction --------------------------------------------------------
+
+    def _build_optimizers(self) -> tuple[list[torch.optim.Optimizer], list[float]]:
+        """Returns `(optimizers, base_lrs)`, kept parallel: `train_step` schedules
+        `optimizers[i]`'s lr off `base_lrs[i]` every step (see `lr_at_step`). `adamw`/`lion`
+        are a single optimizer over both param groups (matrix weights get `weight_decay`,
+        vectors don't -- see `build_param_groups`); `muon` is the nanoGPT-speedrun hybrid: Muon
+        orthogonalizes the 2D hidden matrices, a plain (no-decay) AdamW handles everything else
+        (embeddings, norm gains) since Muon's "orthogonalize a matrix update" framing doesn't
+        apply to those.
+        """
+        o = self.cfg.optim
+        if o.optimizer == "adamw":
+            opt = torch.optim.AdamW(
+                build_param_groups(self.model, o.weight_decay), lr=o.lr, betas=o.betas
+            )
+            return [opt], [o.lr]
+        if o.optimizer == "lion":
+            opt = Lion(build_param_groups(self.model, o.weight_decay), lr=o.lr, betas=o.betas)
+            return [opt], [o.lr]
+        if o.optimizer == "muon":
+            matrix_params, vector_params = _split_params_by_ndim(self.model)
+            muon_opt = Muon(
+                matrix_params, lr=o.muon_lr, momentum=o.muon_momentum, ns_steps=o.muon_ns_steps
+            )
+            adamw_opt = torch.optim.AdamW(
+                [{"params": vector_params, "weight_decay": 0.0}], lr=o.lr, betas=o.betas
+            )
+            return [muon_opt, adamw_opt], [o.muon_lr, o.lr]
+        raise ValueError(f"unknown optimizer {o.optimizer!r}")
+
     # -- checkpointing --------------------------------------------------------
 
     def save_checkpoint(self, path: Path) -> None:
@@ -148,7 +215,7 @@ class Trainer:
                 "tokens_seen": self.tokens_seen,
                 "best_val_loss": self.best_val_loss,
                 "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
+                "optimizer_state_dicts": [opt.state_dict() for opt in self.optimizers],
             },
             path,
         )
@@ -156,7 +223,8 @@ class Trainer:
     def load_checkpoint(self, path: Path) -> None:
         ckpt = torch.load(path, map_location=self.device)
         self.model.load_state_dict(ckpt["model_state_dict"])
-        self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        for opt, state in zip(self.optimizers, ckpt["optimizer_state_dicts"]):
+            opt.load_state_dict(state)
         self.step = ckpt["step"]
         self.tokens_seen = ckpt["tokens_seen"]
         self.best_val_loss = ckpt["best_val_loss"]
@@ -165,17 +233,25 @@ class Trainer:
 
     def train_step(self) -> tuple[float, float, float]:
         self.model.train()
-        lr = lr_at_step(self.step, self.cfg)
-        for g in self.optimizer.param_groups:
-            g["lr"] = lr
-        self.optimizer.zero_grad(set_to_none=True)
+        lrs = [lr_at_step(self.step, self.cfg, base_lr=b) for b in self._base_lrs]
+        for opt, lr in zip(self.optimizers, lrs):
+            for g in opt.param_groups:
+                g["lr"] = lr
+            opt.zero_grad(set_to_none=True)
 
+        z_loss_weight = self.cfg.optim.z_loss_weight
         total_loss = 0.0
         for micro in range(self.cfg.batch.grad_accum):
             data_step = self.step * self.cfg.batch.grad_accum + micro
             x, y = self.train_loader.get_batch(data_step, self.cfg.batch.micro_batch, self.device)
             with autocast_ctx(self.device):
-                _, loss = self.model(x, y)
+                logits, loss = self.model(x, y)
+                if z_loss_weight:
+                    # PaLM '22 z-loss: penalize log Z (the softmax normalizer) growing large,
+                    # which otherwise drifts unbounded since only *differences* between logits
+                    # matter to cross-entropy -- a stability aid, not an accuracy one.
+                    z_loss = logits.logsumexp(dim=-1).pow(2).mean()
+                    loss = loss + z_loss_weight * z_loss
             loss = loss / self.cfg.batch.grad_accum
             loss.backward()
             total_loss += loss.item()
@@ -183,9 +259,10 @@ class Trainer:
         grad_norm = torch.nn.utils.clip_grad_norm_(
             self.model.parameters(), self.cfg.optim.grad_clip
         )
-        self.optimizer.step()
+        for opt in self.optimizers:
+            opt.step()
         self.tokens_seen += self.tokens_per_step
-        return total_loss, float(grad_norm), lr
+        return total_loss, float(grad_norm), lrs[0]
 
     @torch.no_grad()
     def evaluate(self) -> float:

@@ -1302,4 +1302,109 @@ there (bytes/token scales with n_layers·d, and the MLA-vs-GQA quality gap may o
 larger scale/longer training). If MLA is chosen for the capstone, implement weight absorption +
 pre-allocated cache first (this session's decode path is correct but not throughput-optimized).
 
-<!-- Append new decisions below. Next ID: D-039 -->
+## D-039 — Wave D (optimizers & schedules) complete: Muon is the single biggest lever found so far, WSD/late-decay beats cosine, Lion/z-loss/AdamW-hparam runs are honest nulls or need re-tuning (2026-07-13, phase 5)
+**Decision:** Implemented **Muon** (Jordan '24 Newton-Schulz-orthogonalized momentum, hybrid with
+AdamW for embeddings/norms per the nanoGPT speedrun recipe) and **Lion** (Chen '23 sign-based
+update) as new `torch.optim.Optimizer` subclasses (`src/llmlab/train/optimizers.py`), generalized
+`Trainer`'s single-AdamW assumption into a list-of-optimizers design (`_build_optimizers`,
+`OptimConfig.optimizer`), generalized the lr schedule from hardcoded cosine into a dispatched
+`_schedule_multiplier` (`cosine`/`wsd`/`constant`, `OptimConfig.schedule`), and added PaLM '22
+z-loss (`OptimConfig.z_loss_weight`, computed in `train_step` from the logits `GPT.forward()`
+already returns — no model-code change needed). Ran 13 short S-tier runs on the RTX 5090 gpuhub
+instance (same host as Waves A-C, singapore-b:25864, ~42 min wall-clock total for the first 11).
+
+**Design decisions made before running:**
+1. **New Wave D control, not a reuse of `p4_s_baseline`.** Switched `micro_batch`/`grad_accum`
+   from the Mac-tuned 16/8 to the RTX 5090's measured S-tier sweet spot 64/2 (D-030) — same
+   65,536 tok/step effective batch, but the loader's stateless `(seed, step)` sampling is keyed
+   off `step * grad_accum + micro`, so this changes which data offsets land on which step even at
+   an identical effective batch. Same reasoning as Wave C's n_heads=4 control (D-038). Confirmed
+   within noise of `p4_s_baseline` (3.4977 vs 3.5037).
+2. **Muon hybrid split:** 2D hidden weight matrices (attn/ffn projections) -> Muon
+   (`muon_lr=0.02`, momentum=0.95, 5 Newton-Schulz steps); embeddings/norms -> a separate,
+   no-decay AdamW (`lr=1e-3`). Both schedule off the same warmup/decay *shape*
+   (`lr_at_step(step, cfg, base_lr=...)` now takes an optional peak-lr override) at their own
+   peak values — lets one `_schedule_multiplier` serve both optimizers.
+3. **Lion's hyperparameters were NOT swept** — used the paper's recommended one-shot conversion
+   from the AdamW recipe (lr /3.3 -> 3e-4, wd x3 -> 0.3) rather than spending session time tuning
+   it, given the wave's run budget. This matters for how the result should be read (see below).
+4. **Batch-size study held lr fixed** (deliberately not applying the linear-scaling rule) to
+   demonstrate the batch/steps/lr coupling directly, at a fixed ~98.3M-token budget across all
+   three effective-batch points (0.06M control / 0.25M / 1M tok/step).
+5. **WSD multi-budget bonus implemented as a real fork**, not simulated: `wave_d_constant`
+   (warmup+flat-forever, no decay) ran to completion first; its real step-1500 checkpoint was
+   then reused (copied into two new run folders on the remote) for two independent decay-tail
+   continuations (`--resume`) at different total budgets (+10%/+26.7% tokens), with
+   `wsd_decay_ratio` set per-fork so decay starts exactly at the resume point.
+
+**Results (val_loss vs control 3.4977, judged against the D-035 noise floor of 0.015-0.02):**
+| Run | val_loss | delta | verdict |
+|---|---|---|---|
+| Muon | 3.3432 | **-0.1545** | REAL, ROBUST, best of the wave |
+| Lion | 3.9203 | +0.4226 | REAL as run, but un-tuned — not a fair verdict on Lion |
+| WSD | 3.3764 | -0.1213 | REAL win |
+| constant (no decay) | 3.4303 | -0.0674 | REAL win (surprising — beats cosine) |
+| z-loss (1e-4) | 3.5029 | +0.0052 | null (within noise) |
+| grad_clip off (1e6) | 3.5192 | +0.0215 | REAL but undramatic — no spike |
+| batch 0.25M tok/step | 4.2567 | +0.759 | REAL, as predicted |
+| batch 1M tok/step | 5.3942 | +1.8965 | REAL direction, magnitude confounded (see below) |
+| AdamW wd=0 | 3.4935 | -0.0042 | null |
+| AdamW beta2=0.999 | 3.5099 | +0.0122 | null |
+| WSD fork, short (+10% tok) | 3.3220 | -0.1083 vs fork point | REAL |
+| WSD fork, long (+26.7% tok) | 3.2768 | -0.1535 vs fork point | REAL, best number in the wave |
+
+**The schedule hierarchy is the wave's cleanest finding:** WSD (-0.1213) > constant (-0.0674) >
+cosine (control) — decaying the LR only at the very end beats never decaying, which in turn
+beats cosine's continuous decay from step 30 onward. WSD was already slightly ahead of cosine
+by step 500-1000, BEFORE its own decay phase even starts (decay begins at step 1200) — evidence
+that cosine's early, continuous decay costs real ground well before its own endpoint.
+
+**Muon's gap narrows but never closes** (-0.267 @ step500 -> -0.185 @ step1000 -> -0.155 final) —
+matches the nanoGPT speedrun's framing of Muon as primarily a *convergence-speed* accelerator
+(biggest edge early) rather than a higher asymptotic ceiling.
+
+**grad-clip-off did NOT produce the spec's predicted "spike."** `clip_grad_norm_` always returns
+the PRE-clip norm regardless of whether clipping is subsequently applied, so the logged
+`grad_norm` metric is identical (max 5.51 at step 0, both runs) whether or not clipping happens —
+the real effect (control's train_loss consistently ~0.02-0.1 lower at every early checkpoint) is
+steady and small, not a dramatic single event. At this depth (15 layers, pre-norm) with a 30-step
+warmup, the architecture is already stable enough that grad_clip=1.0 rarely binds hard.
+
+**Two honest confounds flagged rather than papered over** (matches this project's established
+self-correction culture, e.g. D-032->D-034): (a) Lion's result reflects one un-tuned
+hyperparameter guess, not a real Lion-vs-AdamW/Muon verdict; (b) the 1M-tok/step batch run's
+`warmup_steps=30` wasn't scaled down, so 32% of its 94-step budget is warmup — the direction
+(bigger batch without lr scaling undertrains at fixed tokens) is confirmed by the cleaner 0.25M
+point, but the 1M point's magnitude is inflated by this oversight.
+
+**Options considered:** fusing Muon+AdamW into one combined optimizer class (rejected — two
+plain `torch.optim.Optimizer` instances the `Trainer` steps/checkpoints as a list is simpler and
+keeps each optimizer's own logic/tests independent); tuning Lion's lr before reporting (rejected
+for this session's time budget — flagged as a follow-up instead of blocking the wave); simulating
+the WSD multi-budget bonus via config math alone instead of a real checkpoint fork (rejected —
+the whole point is demonstrating it works on real trained weights, and the extra GPU cost was
+trivial, ~1 min).
+
+**Why this matters:** Muon is the single largest effect-size finding in the project to date
+(>10x the noise floor), and the WSD-vs-cosine schedule hierarchy + multi-budget fork are
+directly actionable for phase 9's recipe. This completes the M2 milestone (Waves A-D all done).
+
+**Impacts:** `src/llmlab/train/optimizers.py` (new: `Lion`, `Muon`, `zeropower_via_newtonschulz5`),
+`src/llmlab/train/config.py` (`OptimConfig` +optimizer/muon_*/schedule/wsd_decay_ratio/
+z_loss_weight fields), `src/llmlab/train/trainer.py` (`_build_optimizers`,
+`_schedule_multiplier`, `_split_params_by_ndim`, list-of-optimizers checkpointing, z-loss in
+`train_step`), `tests/test_optimizers.py` (new, 8 tests), `tests/test_trainer.py` (+7 tests:
+schedule shapes, base_lr override, Lion/Muon resume round-trips, z-loss sanity) — full suite 96
+passed locally (cpu/mps) + 66 passed remotely (cuda). `configs/train_s_wave_d_*.yaml` (13 new),
+`experiments/20260713_p5_s-wave-d-*/` (13 runs, config+metrics+samples+notes.md; checkpoints
+stayed on the remote except where reused for the WSD fork), `experiments/registry.csv` (13 rows),
+`docs/results/wave_d_optimizers_schedules.png`, `scripts/plot_wave_d.py`,
+`docs/results/ablation_log.md`.
+
+**Revisit if:** a phase-9 recipe decision needs Lion re-tuned properly (sweep lr/wd before using
+its result either way); the M/L tier wants to confirm Muon's speedup holds at larger
+model/context size (this was S-tier/10M-params only); a future wave wants the grad-clip-off
+"dramatic spike" demo specifically — would need a less-stable setup (higher lr, no warmup, or a
+much longer run) to actually produce one at this architecture's depth.
+
+<!-- Append new decisions below. Next ID: D-040 -->

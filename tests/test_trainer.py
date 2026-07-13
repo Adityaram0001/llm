@@ -21,7 +21,9 @@ TOKENIZER_DIR = "data/tokenized/tokenizers/hf_bpe_16k"
 
 
 def fake_train_cfg(**overrides) -> SimpleNamespace:
-    optim = SimpleNamespace(lr=1e-3, lr_min_ratio=0.1, warmup_steps=10)
+    optim = SimpleNamespace(
+        lr=1e-3, lr_min_ratio=0.1, warmup_steps=10, schedule="cosine", wsd_decay_ratio=0.2
+    )
     base = SimpleNamespace(optim=optim, max_steps=100)
     for k, v in overrides.items():
         setattr(base, k, v)
@@ -37,6 +39,40 @@ def test_lr_at_step_linear_warmup_then_cosine_decay():
 
     lrs = [lr_at_step(s, cfg) for s in range(10, 101, 5)]
     assert all(a >= b for a, b in zip(lrs, lrs[1:])), "lr must be non-increasing after warmup"
+
+
+def test_lr_at_step_constant_schedule_stays_flat_after_warmup():
+    cfg = fake_train_cfg(optim=SimpleNamespace(lr=1e-3, warmup_steps=10, schedule="constant"))
+    assert lr_at_step(9, cfg) == pytest.approx(1e-3 * 10 / 10)
+    assert lr_at_step(10, cfg) == pytest.approx(1e-3)
+    assert lr_at_step(99, cfg) == pytest.approx(1e-3)  # no decay, ever
+
+
+def test_lr_at_step_wsd_schedule_stable_then_decays():
+    cfg = fake_train_cfg(
+        optim=SimpleNamespace(
+            lr=1e-3, lr_min_ratio=0.1, warmup_steps=10, schedule="wsd", wsd_decay_ratio=0.2
+        ),
+        max_steps=100,
+    )
+    # stable phase: flat at peak lr from warmup end through step 79 (decay starts at 100*0.8=80)
+    assert lr_at_step(10, cfg) == pytest.approx(1e-3)
+    assert lr_at_step(79, cfg) == pytest.approx(1e-3)
+    # decay phase: strictly decreasing from 80 to max_steps, ending at lr_min
+    decay_lrs = [lr_at_step(s, cfg) for s in range(80, 101)]
+    assert all(a >= b for a, b in zip(decay_lrs, decay_lrs[1:]))
+    assert lr_at_step(100, cfg) == pytest.approx(1e-3 * 0.1)
+
+
+def test_lr_at_step_base_lr_override_scales_independently():
+    """The Muon+AdamW hybrid schedules two optimizers off one shape (`_schedule_multiplier`)
+    at two different peak lrs -- `base_lr` must scale the whole curve, not just the peak."""
+    cfg = fake_train_cfg(
+        optim=SimpleNamespace(lr=1e-3, lr_min_ratio=0.1, warmup_steps=10, schedule="cosine")
+    )
+    assert lr_at_step(5, cfg, base_lr=0.02) == pytest.approx(0.02 * 6 / 10)
+    assert lr_at_step(10, cfg, base_lr=0.02) == pytest.approx(0.02)
+    assert lr_at_step(100, cfg, base_lr=0.02) == pytest.approx(0.02 * 0.1)
 
 
 def test_build_param_groups_excludes_norms_and_embeddings():
@@ -55,7 +91,7 @@ def test_build_param_groups_excludes_norms_and_embeddings():
     assert len(decay_ids) + len(no_decay_ids) == sum(1 for _ in model.parameters())
 
 
-def make_tiny_trainer(tmp_path, run_name: str, seed: int = 0) -> Trainer:
+def make_tiny_trainer(tmp_path, run_name: str, seed: int = 0, optim_overrides: dict | None = None) -> Trainer:
     model_cfg_path = tmp_path / "model_tiny.yaml"
     model_cfg_path.write_text(
         yaml.dump(
@@ -75,6 +111,7 @@ def make_tiny_trainer(tmp_path, run_name: str, seed: int = 0) -> Trainer:
     rng.integers(0, 16000, size=4000, dtype=np.uint16).tofile(train_bin)
     rng.integers(0, 16000, size=1000, dtype=np.uint16).tofile(val_bin)
 
+    optim = {"lr": 1e-3, "warmup_steps": 2, **(optim_overrides or {})}
     cfg = TrainConfig(
         seed=seed,
         model_config=str(model_cfg_path),
@@ -82,7 +119,7 @@ def make_tiny_trainer(tmp_path, run_name: str, seed: int = 0) -> Trainer:
         seq_len=16,
         sources=[{"name": "t", "path": str(train_bin), "weight": 1.0}],
         val_sources=[{"name": "v", "path": str(val_bin), "weight": 1.0}],
-        optim={"lr": 1e-3, "warmup_steps": 2},
+        optim=optim,
         batch={"micro_batch": 4, "grad_accum": 1},
         max_steps=20,
         eval={"eval_every": 5, "eval_batches": 2, "eval_batch_size": 4},
@@ -118,3 +155,47 @@ def test_resume_reproduces_the_same_loss_trajectory(tmp_path):
     losses_resumed = run_n_steps(resumed, 4)  # steps 6..9, after a simulated resume
 
     assert losses_resumed == pytest.approx(losses_uninterrupted)
+
+
+@pytest.mark.parametrize(
+    "optim_overrides",
+    [
+        {"optimizer": "lion", "lr": 3e-4, "betas": (0.9, 0.99)},
+        {"optimizer": "muon", "lr": 1e-3, "muon_lr": 0.02, "muon_momentum": 0.9},
+    ],
+)
+def test_resume_reproduces_the_same_loss_trajectory_for_wave_d_optimizers(tmp_path, optim_overrides):
+    """Same bit-exact-resume check as above, but for Lion (single optimizer, new update rule)
+    and Muon (TWO optimizers -- exercises `_build_optimizers`'/checkpointing's list handling,
+    the part of Wave D's hybrid-optimizer design most likely to silently drop state on resume)."""
+    trainer = make_tiny_trainer(tmp_path, "run1", optim_overrides=optim_overrides)
+    run_n_steps(trainer, 6)
+    ckpt_path = trainer.run_dir / "ckpt" / "latest.pt"
+    trainer.save_checkpoint(ckpt_path)
+    step_at_checkpoint = trainer.step
+
+    losses_uninterrupted = run_n_steps(trainer, 4)
+
+    resumed = make_tiny_trainer(tmp_path, "run2", optim_overrides=optim_overrides)
+    resumed.load_checkpoint(ckpt_path)
+    assert resumed.step == step_at_checkpoint
+    losses_resumed = run_n_steps(resumed, 4)
+
+    assert losses_resumed == pytest.approx(losses_uninterrupted)
+
+
+def test_z_loss_changes_optimization_when_enabled(tmp_path):
+    """z-loss is added inside `train_step` to the tensor that gets `.backward()`ed -- confirm
+    turning it on measurably changes the gradient (a different grad_norm from the same
+    starting weights) rather than silently being a no-op."""
+    import copy
+
+    (tmp_path / "off").mkdir()
+    (tmp_path / "on").mkdir()
+    t_off = make_tiny_trainer(tmp_path / "off", "off", optim_overrides={"z_loss_weight": 0.0})
+    t_on = make_tiny_trainer(tmp_path / "on", "on", optim_overrides={"z_loss_weight": 1.0})
+    t_on.model.load_state_dict(copy.deepcopy(t_off.model.state_dict()))
+
+    _, grad_norm_off, _ = t_off.train_step()
+    _, grad_norm_on, _ = t_on.train_step()
+    assert grad_norm_off != pytest.approx(grad_norm_on)

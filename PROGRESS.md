@@ -5,11 +5,38 @@
 
 **Active phase:** Phase 4 is **done** (milestone M1 declared). Phase 5
 (`docs/phases/phase5_ablations.md`) is **in-progress**: seed-noise study done (D-035), **Wave A
-done (D-036)**, **Wave B done (D-037)**, **Wave C done (D-038)**. **Wave D (optimizers &
-schedules: AdamW sweeps, Lion, Muon, cosine/WSD/constant, z-loss, batch-size study, grad-clip-off
-spike demo) is next** — flagship #2, Muon's Newton–Schulz orthogonalization is the main new
-implementation. Waves A–D done = the M2 milestone (only Wave D left for it).
-**Last session (2026-07-13, Wave C):** implemented **MLA** (`MLAAttention`, DeepSeek-V2 §2) + a
+done (D-036)**, **Wave B done (D-037)**, **Wave C done (D-038)**, **Wave D done (D-039)**.
+**Waves A-D done = the M2 milestone is DECLARED.** Wave E (efficiency & memory: bf16 vs fp32,
+grad checkpointing, micro-batch/accum equivalence, weight tying, torch.compile attempt,
+activation-memory-vs-seq-len) is next — measurement-heavy, less new-code-heavy than C/D.
+
+**This session (2026-07-13, Wave D):** implemented **Muon** (Jordan '24 Newton-Schulz
+orthogonalization, hybrid with AdamW for embeddings/norms per the nanoGPT speedrun recipe) and
+**Lion** (Chen '23 sign-based update) as new optimizers (`src/llmlab/train/optimizers.py`),
+generalized `Trainer` to a list-of-optimizers design, generalized the lr schedule to dispatch
+`cosine`/`wsd`/`constant`, and added PaLM z-loss. Ran 13 short S-tier runs on the RTX 5090
+(~42 min wall-clock for the first 11, then 2 more for the WSD-fork bonus). **Result (D-039):
+Muon is the single biggest effect found in the project so far** (-0.1545 val_loss vs the AdamW
+control, >10x the D-035 noise floor) — gap largest early, narrowing but never closing (matches
+Muon's "faster convergence" framing). **Schedule hierarchy WSD > constant > cosine** (-0.1213 /
+-0.0674 / control) — *when* you decay matters as much as whether you decay at all; WSD was
+already ahead of cosine before its own decay phase even started. **WSD multi-budget bonus**: two
+decay forks off the SAME shared stable-phase checkpoint (`wave_d_constant`'s final weights, real
+`--resume`, not simulated) at +10%/+26.7% tokens reached 3.3220/3.2768 — demonstrating you can
+decide the final token budget after training, not before. Honest confounds flagged rather than
+hidden: Lion's +0.4226 "loss" reflects one un-tuned paper-recipe hyperparameter guess, not a real
+verdict against Lion; the batch-size study's 1M-tok/step point is partly confounded by an
+unscaled 30-step warmup eating 32% of its 94-step budget (the cleaner 0.25M point confirms the
+same direction). grad-clip-off did NOT spike as the spec predicted — `clip_grad_norm_` always
+logs the pre-clip norm so the metric can't show a difference, and the real effect is a small,
+steady degradation, not a blowup, at this depth/warmup. New: `optimizers.py` (`Lion`, `Muon`,
+`zeropower_via_newtonschulz5`), hybrid-optimizer checkpointing, `_schedule_multiplier`, z-loss in
+`train_step`, 13 `configs/train_s_wave_d_*.yaml`, `scripts/plot_wave_d.py`,
+`docs/results/wave_d_optimizers_schedules.png`, +15 tests (96 local / 66 remote-cuda, all pass).
+**GPU LEFT RUNNING (singapore-b:25864) — user must stop it to stop billing** once satisfied
+everything synced down correctly; nothing else pending on it this session.
+
+**Earlier same day (Wave C):** implemented **MLA** (`MLAAttention`, DeepSeek-V2 §2) + a
 full **incremental KV-cache decode path** for all 4 attention variants (new
 `src/llmlab/model/kv_cache.py`; `cache=` threaded through attention/block/gpt; `generate()`
 rewritten prefill-once-then-1-tok/step — cached decode bit-exact vs full forward on cpu/mps/cuda).
@@ -239,16 +266,27 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   quality loss). MLA + incremental KV-cache decode implemented & tested (bit-exact cpu/mps/cuda);
   `notebooks/06_mla_explained.ipynb` + `scripts/bench_inference.py` done. Honest caveat: at 10M
   params decode is launch-bound so cache ≠ speed, MLA ~25% slower/tok (no absorption trick).
-- [ ] Wave D — Optimizers & schedules (AdamW sweeps, Lion, Muon, cosine/WSD/constant, z-loss,
-  batch-size study, grad-clip-off spike demo)
+- [x] Wave D — Optimizers & schedules (D-039): **Muon best of the wave** (-0.1545 vs AdamW
+  control, >10x noise floor, gap largest early/narrowing but never closing) — new
+  `src/llmlab/train/optimizers.py` (`Muon` Newton-Schulz hybrid w/ AdamW for embed/norms, `Lion`).
+  **Schedule hierarchy WSD (-0.1213) > constant (-0.0674) > cosine (control)** — decaying only at
+  the end beats never decaying, which beats cosine's continuous early decay. **WSD multi-budget
+  bonus**: 2 real `--resume` decay forks off `wave_d_constant`'s shared checkpoint (+10%/+26.7%
+  tokens) reached 3.3220/3.2768. z-loss + AdamW wd/beta2 sweep: null results (within noise) at
+  this budget. grad-clip-off: real but undramatic (+0.0215, no spike — `clip_grad_norm_` always
+  logs the pre-clip norm). batch-size study: fixed-token-budget bigger batch undertrains with lr
+  not rescaled (confirmed, though the 1M-tok/step point has an unscaled-warmup confound). Lion's
+  result flagged as untuned, not a real verdict against it. Figure:
+  `docs/results/wave_d_optimizers_schedules.png`. 13 runs registered, +15 tests (96 pass).
 - [ ] Wave E — Efficiency & memory (bf16 vs fp32, grad checkpointing, micro-batch/accum
   equivalence, weight tying, torch.compile attempt, activation-memory-vs-seq-len)
 - [ ] Wave F — DeepSeek specials (MoE w/ aux-loss vs aux-loss-free, MTP) — needs RW-5 fixed for
   full context-length work but MoE/MTP themselves don't require it
 - [ ] Wave G — Data & scaling (multi-epoch overfitting lab, dictionary ablation, RW-4 domain-mix
   ablation, mini scaling law `notebooks/07_scaling_law.ipynb`)
-- [ ] Exit criteria: waves A-D done + verdicts (M2), figures in `docs/results/`, all runs
-  registered, `docs/results/recipe.md` written
+- [x] Exit criteria (M2): waves A-D done + verdicts, figures in `docs/results/`, all runs
+  registered. **M2 DECLARED 2026-07-13.** `docs/results/recipe.md` (phase 9 input) still not
+  written — deferred until Waves E-G land too, same reasoning as Wave C's session note.
 
 ## Rework queue (see CLAUDE.md "Change management")
 

@@ -59,3 +59,39 @@ KV-cache decode for all 4 variants (`kv_cache.py`, rewritten `generate()`), `ben
   when KV-cache memory is the binding constraint (long context / large batch), accepting its
   decode-compute overhead (which absorption + a pre-allocated cache would remove). MQA only if
   cache is the single overriding constraint and a small quality hit is acceptable.
+
+## Wave D — Optimizers & schedules (2026-07-13)
+
+Control: `20260713_p5_s-wave-d-control` — Wave D's own control (mb=64/accum=2 GPU-tuned recipe,
+same 65,536 tok/step effective batch as `p4_s_baseline`, val 3.4977, within noise of it). Noise
+floor: 0.015-0.02 (D-035). Figure: `docs/results/wave_d_optimizers_schedules.png`. New code:
+`Muon`/`Lion` optimizers + Newton-Schulz orthogonalization (`train/optimizers.py`), hybrid
+Muon+AdamW optimizer construction/checkpointing, `cosine`/`wsd`/`constant` schedule dispatch,
+PaLM z-loss (all in `train/{config,trainer}.py`).
+- **Muon:** **best of the wave** (-0.1545 vs AdamW control, >10x noise floor) — gap largest early,
+  narrowing but never closing; reproduces the nanoGPT speedrun's "faster convergence" claim.
+- **Lion:** worst of the wave (+0.4226) but a one-shot, un-tuned lr/wd conversion from the
+  AdamW recipe — flagged as needing a real sweep, not a fair verdict against Lion itself.
+- **WSD vs cosine:** real win (-0.1213) — already ahead before its own decay phase even starts,
+  showing cosine's continuous early decay costs real ground.
+- **constant (no decay) vs cosine:** real win (-0.0674), establishing the hierarchy
+  **WSD > constant > cosine** — *when* you decay matters as much as whether you decay at all.
+- **WSD multi-budget bonus:** two decay forks off `wave_d_constant`'s SAME shared step-1500
+  checkpoint (+10%/+26.7% tokens) reach 3.3220/3.2768 — a clean demonstration that WSD lets you
+  decide the final token budget after training, not before.
+- **z-loss, AdamW wd=0/beta2=0.999:** all null results (within noise) at this token budget — no
+  failure mode for z-loss to fix yet, and not enough training for wd/beta2's long-horizon
+  mechanisms to differentiate.
+- **grad-clip off:** real but undramatic (+0.0215) — no spike (`clip_grad_norm_` logs the
+  pre-clip norm regardless of whether it applies, so the metric can't show a difference by
+  construction), just steady small degradation; this depth/warmup combo is already stable enough
+  that clipping rarely binds.
+- **batch-size study (fixed ~98.3M tokens, lr NOT rescaled):** monotonically worse with fewer/
+  bigger-batch steps (control 3.50 → 0.25M-batch 4.26 → 1M-batch 5.39) — confirms the batch/
+  steps/lr coupling, though the 1M point is partly confounded by an unscaled 30-step warmup
+  eating 32% of its 94-step budget.
+- **Verdict for phase 9's recipe:** **Muon** is the strongest single lever found in the project
+  so far if training speed/compute is the binding constraint; **WSD** (or at minimum, decay only
+  late rather than continuously) beats cosine for free; the AdamW wd/beta2 defaults (D-021) stand
+  unchanged; z-loss and grad-clip are cheap insurance worth keeping even though this scale can't
+  prove their value yet.
