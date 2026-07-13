@@ -13,6 +13,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 from .block import Block
 from .config import ModelConfig
@@ -58,6 +59,13 @@ class GPT(nn.Module):
 
         self.apply(self._init_weights)
         self._scale_residual_projections()
+
+        # Wave E (phase 5): gradient checkpointing is a runtime memory/compute trade-off, not
+        # an architecture choice, so it's a plain attribute (set by Trainer from TrainConfig)
+        # rather than a ModelConfig field -- toggling it doesn't change what the model computes,
+        # only whether each block's activations are recomputed on the backward pass instead of
+        # kept in memory (Chen et al. '16). Only applies during training with no KV cache.
+        self.gradient_checkpointing = False
 
     # -- init --------------------------------------------------------------
 
@@ -143,8 +151,13 @@ class GPT(nn.Module):
                 raise ValueError("cached decode is not supported for ALiBi")
             attn_bias = build_alibi_bias(self.cfg.n_heads, T, idx.device)
 
+        use_ckpt = self.gradient_checkpointing and self.training and caches is None
         for i, block in enumerate(self.blocks):
-            x = block(x, attn_bias, None if caches is None else caches[i])
+            cache = None if caches is None else caches[i]
+            if use_ckpt:
+                x = torch.utils.checkpoint.checkpoint(block, x, attn_bias, cache, use_reentrant=False)
+            else:
+                x = block(x, attn_bias, cache)
         x = self.final_norm(x)
         logits = self.lm_head(x)
 

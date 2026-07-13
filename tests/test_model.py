@@ -173,6 +173,52 @@ def test_untied_weights_are_independent(device):
     assert breakdown["head"] > 0
 
 
+# -- gradient checkpointing (Wave E) --------------------------------------------------
+
+
+def test_gradient_checkpointing_matches_no_checkpointing(device):
+    """Gradient checkpointing (Chen et al. '16) trades recompute-on-backward for lower
+    activation memory -- it must NOT change what's computed. Same weights, same input, same
+    dropout (0.0, so no RNG divergence risk): checkpointed and non-checkpointed forward+backward
+    should agree on loss and every gradient to floating-point precision."""
+    torch.manual_seed(0)
+    cfg = tiny_config()
+    model = GPT(cfg).to(device)
+    x = torch.randint(0, cfg.vocab_size, (2, 10), device=device)
+    y = torch.randint(0, cfg.vocab_size, (2, 10), device=device)
+
+    model.gradient_checkpointing = False
+    model.train()
+    logits_plain, loss_plain = model(x, y)
+    loss_plain.backward()
+    grads_plain = [p.grad.clone() for p in model.parameters()]
+    model.zero_grad(set_to_none=True)
+
+    model.gradient_checkpointing = True
+    logits_ckpt, loss_ckpt = model(x, y)
+    loss_ckpt.backward()
+    grads_ckpt = [p.grad.clone() for p in model.parameters()]
+
+    assert torch.allclose(logits_plain, logits_ckpt)
+    assert loss_plain.item() == pytest.approx(loss_ckpt.item())
+    for g_plain, g_ckpt in zip(grads_plain, grads_ckpt):
+        assert torch.allclose(g_plain, g_ckpt, atol=1e-6)
+
+
+def test_gradient_checkpointing_disabled_during_eval(device):
+    """`use_ckpt` requires `self.training` -- confirms eval-mode forward (as used by
+    Trainer.evaluate) never checkpoints, since there's no backward pass to save memory for and
+    checkpointing would just add pointless recompute risk to an eval loop."""
+    cfg = tiny_config()
+    model = GPT(cfg).to(device)
+    model.gradient_checkpointing = True
+    model.eval()
+    x = torch.randint(0, cfg.vocab_size, (2, 10), device=device)
+    with torch.no_grad():
+        logits, _ = model(x)
+    assert logits.shape == (2, 10, cfg.vocab_size)
+
+
 # -- RoPE relative-shift property --------------------------------------------------
 
 

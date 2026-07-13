@@ -1,0 +1,29 @@
+# S-tier, weight tying OFF (Wave E ablation of D-016's tied-embeddings default).
+# Adds a separate vocab_size*d_model unembedding matrix: +3.07M params vs model_s.yaml's tied
+# 9.71M (12.78M total) -- the D-016 parameter-budget argument said untied costs the L-tier ~9%
+# of its budget for no known benefit; this run empirically checks the "no known benefit" half
+# of that claim at S-tier, same layers/d_model/heads as the control.
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 3
+n_kv_heads: 3
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667
+
+attention: mha_gqa
+
+tie_embeddings: false
+init: gpt2

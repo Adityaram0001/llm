@@ -95,3 +95,49 @@ PaLM z-loss (all in `train/{config,trainer}.py`).
   late rather than continuously) beats cosine for free; the AdamW wd/beta2 defaults (D-021) stand
   unchanged; z-loss and grad-clip are cheap insurance worth keeping even though this scale can't
   prove their value yet.
+
+## Wave E — Efficiency & memory (2026-07-13)
+
+Control: `20260713_p5_s-wave-d-control` (reused, same as Wave D). Noise floor: 0.015-0.02
+(D-035). Figure: `docs/results/wave_e_efficiency_memory.png`. New code this wave: `precision`
+(bf16/fp32) and `gradient_checkpointing` knobs on `TrainConfig`/`Trainer`/`GPT` (checkpointing
+wraps each block in `torch.utils.checkpoint.checkpoint` when training with no KV cache),
+`compile` knob (`torch.compile(model)`, checkpointing routed through `Trainer._raw_model` so
+save/load never depends on the compiled wrapper's state_dict key naming),
+`scripts/bench_activation_memory.py` (peak-GPU-memory-vs-seq_len sweep). Unlike Waves A-D, four
+of five axes here are NULL results on loss by design — the interesting numbers are speed/memory,
+not val_loss.
+- **bf16 vs fp32:** NULL on quality (+0.0083, within noise) — REAL on speed: fp32 is ~35% slower
+  (~296.8K vs ~455.1K tok/s). bf16 autocast is free accuracy-wise; no reason to train in fp32 on
+  this hardware.
+- **Gradient checkpointing:** NULL on quality (-0.0088, within noise, as expected — recompute
+  isn't approximation) — REAL cost at this size (~27% slower, no memory benefit since 512/mb64
+  already fits). The real payoff is the separate seq_len sweep: a remarkably consistent **~1.72x
+  peak-memory reduction at every seq_len** (128 through 1024), and it buys exactly one more
+  doubling of context before OOM on the 5090's 32GB (2048 fits checkpointed, OOMs
+  uncheckpointed at 4096). Textbook Chen et al. '16 trade-off, cleanly reproduced.
+- **Micro-batch/grad-accum equivalence:** NULL on quality across all three factorizations of the
+  same 128-seq effective batch (control mb=64/accum=2, mb=32/accum=4 +0.0008, mb=128/accum=1
+  +0.0040 — all within noise, confirming gradient accumulation is mathematically exact). REAL and
+  large on speed: mb=32/accum=4 is the slowest run in the wave (~248.2K tok/s, ~45% slower than
+  control) and mb=128/accum=1 is the fastest (~525.1K tok/s, ~15% faster) — more than 2x apart
+  despite identical FLOPs and identical loss, confirming D-022's launch-overhead-bound finding.
+  **Loss is factorization-invariant; wall-clock is not** — always prefer the largest micro-batch
+  that fits.
+- **Weight tying off:** REAL but caveated (-0.0278, just past the noise floor, untied wins) —
+  **not a param-matched comparison** (12.79M vs control's 9.71M, +31.6% params), so the win may
+  just be extra capacity rather than evidence tying costs quality at a fixed layer shape. Doesn't
+  overturn D-016's parameter-budget argument (which was about cost-efficiency, not raw quality);
+  a param-matched follow-up is flagged but not run this wave.
+- **torch.compile:** NULL on quality (+0.0014, within noise) — REAL win on speed: **fastest run
+  in the wave** (~535.4K tok/s, ~18% faster than uncompiled control), compiled cleanly on CUDA
+  with no fallback/graph-break issues at this model size. CLAUDE.md's "unreliable on MPS" caveat
+  is untouched by this result (this ran on the 5090); worth defaulting to `compile: true` for
+  future CUDA runs.
+- **Verdict for phase 9's recipe:** stack the free wins — **bf16 + torch.compile** together are
+  plausibly a ~1.6x combined speedup with zero quality cost (not measured jointly this wave, both
+  measured independently against the same control). Use the **largest micro-batch that fits**
+  and reach for **gradient checkpointing** specifically when memory-bound on seq_len or batch
+  size, not by default (~27% slower when memory isn't the constraint). Weight tying's quality
+  question needs a param-matched rerun before it can override D-016's existing budget-driven
+  default.

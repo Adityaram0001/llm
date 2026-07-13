@@ -7,6 +7,7 @@ same per-step losses an uninterrupted run would have produced.
 
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -182,6 +183,55 @@ def test_resume_reproduces_the_same_loss_trajectory_for_wave_d_optimizers(tmp_pa
     losses_resumed = run_n_steps(resumed, 4)
 
     assert losses_resumed == pytest.approx(losses_uninterrupted)
+
+
+def test_gradient_checkpointing_flag_reaches_the_model(tmp_path):
+    """`TrainConfig.gradient_checkpointing` must actually reach `model.gradient_checkpointing`
+    (not just get parsed and ignored) and a step must still run and match the non-checkpointed
+    trajectory bit-for-bit (same property test_model.py checks at the model level, exercised
+    here through the real Trainer/optimizer path)."""
+    import copy
+
+    (tmp_path / "off").mkdir()
+    (tmp_path / "on").mkdir()
+    t_off = make_tiny_trainer(tmp_path / "off", "off")
+    t_on = make_tiny_trainer(tmp_path / "on", "on")
+    assert t_off.model.gradient_checkpointing is False
+    t_on.model.gradient_checkpointing = True
+    assert t_on.model.gradient_checkpointing is True
+    t_on.model.load_state_dict(copy.deepcopy(t_off.model.state_dict()))
+
+    loss_off, grad_norm_off, _ = t_off.train_step()
+    loss_on, grad_norm_on, _ = t_on.train_step()
+    assert loss_off == pytest.approx(loss_on)
+    assert grad_norm_off == pytest.approx(grad_norm_on, rel=1e-4)
+
+
+def test_precision_fp32_disables_autocast(tmp_path):
+    """`precision="fp32"` must swap in a no-op context manager rather than a bf16 autocast --
+    a real step should still run to completion under it (the thing most likely to break: a
+    dtype mismatch between an fp32-forced forward and any component that assumes autocast)."""
+    from contextlib import nullcontext
+
+    trainer = make_tiny_trainer(tmp_path, "fp32run")
+    trainer.cfg.precision = "fp32"
+    assert isinstance(trainer._autocast(), nullcontext)
+    loss, grad_norm, _ = trainer.train_step()
+    assert math.isfinite(loss)
+    assert math.isfinite(grad_norm)
+
+
+def test_precision_unknown_value_raises(tmp_path):
+    trainer = make_tiny_trainer(tmp_path, "badprecision")
+    trainer.cfg.precision = "fp16"
+    with pytest.raises(ValueError):
+        trainer._autocast()
+
+
+def test_compile_disabled_by_default_leaves_raw_model_as_the_model(tmp_path):
+    trainer = make_tiny_trainer(tmp_path, "nocompile")
+    assert trainer.compile_status == "disabled"
+    assert trainer.model is trainer._raw_model
 
 
 def test_z_loss_changes_optimization_when_enabled(tmp_path):

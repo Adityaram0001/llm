@@ -1,0 +1,5 @@
+seq_len,micro_batch,gradient_checkpointing,peak_mem_mb
+128,64,False,2856.2412109375
+256,64,False,5598.0849609375
+512,64,False,11124.0224609375
+1024,64,False,22175.8974609375

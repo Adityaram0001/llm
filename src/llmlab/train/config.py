@@ -90,6 +90,11 @@ class TrainConfig:
     device: str | None = None  # None -> get_device(); "cpu" for the portability smoke test
     checkpoint_every: int = 500
 
+    # Wave E (phase 5): efficiency & memory knobs
+    precision: str = "bf16"  # bf16 | fp32 -- bf16 uses autocast_ctx, fp32 disables autocast entirely
+    gradient_checkpointing: bool = False  # trade recompute-on-backward for lower activation memory
+    compile: bool = False  # torch.compile(model) -- CUDA-only in practice, see CLAUDE.md
+
     # experiment-registry metadata (docs/EXPERIMENTS.md schema)
     phase: int = 4
     tier: str = "S"

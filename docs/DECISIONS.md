@@ -1407,4 +1407,92 @@ model/context size (this was S-tier/10M-params only); a future wave wants the gr
 "dramatic spike" demo specifically — would need a less-stable setup (higher lr, no warmup, or a
 much longer run) to actually produce one at this architecture's depth.
 
-<!-- Append new decisions below. Next ID: D-040 -->
+## D-040 — Wave E results: bf16/torch.compile are free speed wins, gradient checkpointing trades ~27% speed for ~1.72x memory, batch factorization is loss-invariant but not wall-clock-invariant, untied embeddings win but aren't param-matched  (2026-07-13, phase 5)
+**Decision:** Ran phase 5's Wave E (efficiency & memory: bf16 vs fp32, gradient checkpointing,
+micro-batch/accum equivalence, weight tying, torch.compile, activation-memory-vs-seq_len) — 6
+S-tier training runs + a standalone memory-sweep benchmark, all on the RTX 5090
+(gpuhub singapore-b:25864). Unlike Waves A-D, four of five training-run axes are NULL results on
+loss BY DESIGN (they're efficiency knobs that shouldn't change what's computed) — the real
+findings are speed and memory numbers, verified as real effects rather than assumed.
+
+**New code required (this wave needed genuine new trainer/model plumbing, unlike Waves A-C which
+were config+run+analysis only):** `TrainConfig` gained `precision` (bf16/fp32),
+`gradient_checkpointing`, `compile` fields. `GPT` gained a runtime `gradient_checkpointing`
+attribute (deliberately NOT a `ModelConfig` field — it's a compute/memory trade-off that doesn't
+change what's computed, not an architecture choice) wrapping each block in
+`torch.utils.checkpoint.checkpoint(..., use_reentrant=False)` when `self.training` and no KV
+cache is active. `Trainer` gained `_autocast()` (dispatches bf16 autocast vs a plain
+`nullcontext` for fp32 — eval deliberately stays ungated by this, it always ran in fp32 even
+before this wave, so every wave's val_loss stays measured the same way regardless of what
+precision a given run trained under) and a `torch.compile` attempt at init time, guarded by
+try/except so a failure is logged and degrades to uncompiled rather than crashing.
+**Checkpointing correctness fix made in the same pass:** `save_checkpoint`/`load_checkpoint`/
+`num_params()` now go through a new `self._raw_model` reference (the pre-compile module) instead
+of `self.model` directly — `torch.compile`'s wrapper's `state_dict()` key-naming behavior is
+version-dependent, so routing checkpoints through the always-uncompiled reference removes that
+risk entirely rather than trusting current PyTorch's behavior to hold.
+
+**Results (control: `20260713_p5_s-wave-d-control`, reused from Wave D; full writeup
+`docs/results/ablation_log.md`, figure `docs/results/wave_e_efficiency_memory.png`):**
+- **bf16 vs fp32:** NULL on quality (+0.0083, noise), REAL on speed — fp32 is ~35% slower
+  (~296.8K vs ~455.1K tok/s). Confirms D-009's bf16-by-default choice was correctly free.
+- **Gradient checkpointing:** NULL on quality (-0.0088, noise, as expected for an exact
+  recompute), ~27% slower at this size with no memory upside (512/mb64 already fits). The real
+  payoff is a separate `bench_activation_memory.py` seq_len sweep (new script): a consistent
+  **~1.72x peak-memory reduction at every seq_len tested (128-1024)**, and it buys exactly one
+  more doubling of context before OOM on the 5090's 32GB (2048 fits checkpointed, OOMs
+  uncheckpointed; checkpointed itself OOMs at 4096).
+- **Micro-batch/grad-accum equivalence:** three factorizations of the same 128-seq effective
+  batch (control mb=64/accum=2, mb=32/accum=4, mb=128/accum=1) all land within noise on loss —
+  confirms grad accumulation is mathematically exact, not an approximation. But wall-clock varies
+  more than 2x across them (mb=32/accum=4 slowest at ~248.2K tok/s, mb=128/accum=1 fastest at
+  ~525.1K tok/s) for IDENTICAL FLOPs — confirms D-022's launch-overhead-bound finding and gives a
+  concrete rule: **always prefer the largest micro-batch that fits.**
+- **Weight tying off:** REAL but caveated — untied wins (-0.0278, just past noise) but this is
+  **not a param-matched comparison** (12.79M vs control's 9.71M tied, +31.6% params) — the win
+  may just be extra capacity, not evidence tying costs quality at a fixed layer shape. Does not
+  overturn D-016 (which was a cost-efficiency argument, not a quality one); a param-matched
+  rerun is flagged as a future follow-up, not done this wave (time-budget call).
+- **torch.compile:** NULL on quality (+0.0014, noise), REAL win on speed — **fastest run in the
+  wave** (~535.4K tok/s, ~18% faster than uncompiled), compiled cleanly on CUDA with zero
+  fallback/graph-break issues at this size. CLAUDE.md's MPS-unreliable caveat is untouched (ran
+  on the 5090, not tested on Mac this wave).
+
+**Why:** the phase-5 spec explicitly scoped Wave E as "measurement-heavy" — the goal is knowing
+which efficiency knobs are free (bf16, compile), which have honest costs with a specific payoff
+(gradient checkpointing), and which are non-issues that just needed confirming (batch
+factorization's loss-invariance). Verifying each empirically rather than assuming from
+first-principles reasoning caught one real, actionable number in each case (e.g. the exact
+~1.72x memory ratio, the exact 2x+ wall-clock spread across factorizations) that a plausible
+prior guess would have gotten only roughly right.
+
+**Impacts:** `src/llmlab/train/config.py` (+3 fields), `src/llmlab/train/trainer.py`
+(`_autocast`, `_raw_model`, `compile_status`, checkpoint routing fix), `src/llmlab/model/gpt.py`
+(`gradient_checkpointing` attribute + block-wrap), `tests/test_model.py` (+2 tests: checkpointing
+loss/grad parity, eval-mode never checkpoints), `tests/test_trainer.py` (+4 tests: flag reaches
+the model, fp32 disables autocast, unknown precision raises, compile-disabled-by-default leaves
+`model is _raw_model`) — 89 passed locally (cpu/mps), 64 passed remotely (cuda-only device
+matrix, pre-existing gap: `tests/test_model.py`'s `DEVICES` fixture only ever adds mps, never
+cuda — not fixed this wave, out of scope). `scripts/bench_activation_memory.py` (new),
+`scripts/plot_wave_e.py` (new), `configs/train_s_wave_e_*.yaml` (6 new) + `configs/
+model_s_notie.yaml` (new), `experiments/20260713_p5_s-wave-e-*/` (6 runs, config+metrics+
+samples+notes.md, checkpoints stayed remote), `experiments/registry.csv` (+6 rows, real
+verdicts not placeholders), `docs/results/wave_e_efficiency_memory.png`,
+`docs/results/wave_e_activation_memory{,_gradckpt}.csv`, `docs/results/ablation_log.md`.
+Completes Wave E of the Phase 5 checklist (Waves A-D already done as M2); Waves F-G remain.
+
+**Also found and fixed during sync setup (not a decision, but worth a paper trail):** a
+trailing-slash rsync bug (`rsync ... src/ configs/ ... dest/` copies `src/`'s CONTENTS into
+`dest/` rather than creating a `dest/src/` subdirectory) briefly created a stray, incomplete
+top-level `llmlab/` package on the remote pod (missing the `data` subpackage) that shadowed the
+real `src/llmlab/` via Python's cwd-first `sys.path` resolution, breaking `tests/test_trainer.py`
+collection. Removed the stray directory and redid the sync without trailing slashes on the
+source args. No project code was affected — purely a one-time remote-filesystem cleanup.
+
+**Revisit if:** a phase-9 M/L-tier or the capstone run wants to stack bf16+compile+the
+largest-micro-batch-that-fits together (not measured jointly this wave, each was isolated
+against the same control) — worth a quick joint-speedup confirmation before relying on the
+product of the two independent percentages; or if the weight-tying question needs settling
+properly (param-matched untied run) before phase 9's recipe finalizes.
+
+<!-- Append new decisions below. Next ID: D-041 -->

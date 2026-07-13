@@ -144,7 +144,24 @@ class Trainer:
 
         model_cfg = ModelConfig.from_yaml(str(ROOT / cfg.model_config))
         self.model = GPT(model_cfg).to(self.device)
+        self.model.gradient_checkpointing = cfg.gradient_checkpointing
+        self._raw_model = self.model  # always the uncompiled module; used for checkpointing
         self.optimizers, self._base_lrs = self._build_optimizers()
+
+        # Wave E: torch.compile is a graph-capture optimization, not a training-math change --
+        # attempted here so a failure surfaces at startup rather than mid-run, and logged rather
+        # than silently falling back (CLAUDE.md: torch.compile on MPS is unreliable, treat as an
+        # optional experiment). `self.model` becomes the compiled wrapper for forward/backward;
+        # `self._raw_model` still points at the original module so checkpoint state_dict keys
+        # never depend on torch.compile's (version-dependent) attribute-naming internals.
+        self.compile_status = "disabled"
+        if cfg.compile:
+            try:
+                self.model = torch.compile(self.model)
+                self.compile_status = "enabled"
+            except Exception as e:  # pragma: no cover -- environment-dependent compile failures
+                self.compile_status = f"failed: {e}"
+                print(f"torch.compile failed, continuing uncompiled: {e}")
 
         self.train_loader = MixedSourceLoader(_sources(cfg.sources), cfg.seq_len, cfg.seed)
         self.val_loader = MixedSourceLoader(_sources(cfg.val_sources), cfg.seq_len, cfg.seed + 1)
@@ -214,7 +231,7 @@ class Trainer:
                 "step": self.step,
                 "tokens_seen": self.tokens_seen,
                 "best_val_loss": self.best_val_loss,
-                "model_state_dict": self.model.state_dict(),
+                "model_state_dict": self._raw_model.state_dict(),
                 "optimizer_state_dicts": [opt.state_dict() for opt in self.optimizers],
             },
             path,
@@ -222,7 +239,7 @@ class Trainer:
 
     def load_checkpoint(self, path: Path) -> None:
         ckpt = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(ckpt["model_state_dict"])
+        self._raw_model.load_state_dict(ckpt["model_state_dict"])
         for opt, state in zip(self.optimizers, ckpt["optimizer_state_dicts"]):
             opt.load_state_dict(state)
         self.step = ckpt["step"]
@@ -230,6 +247,18 @@ class Trainer:
         self.best_val_loss = ckpt["best_val_loss"]
 
     # -- core loop --------------------------------------------------------
+
+    def _autocast(self):
+        """Wave E precision knob: `precision="bf16"` (default) is `autocast_ctx`'s mixed
+        precision; `precision="fp32"` disables autocast entirely (a plain `nullcontext`), so
+        every matmul actually runs in fp32 rather than merely widening the accumulate dtype."""
+        if self.cfg.precision == "fp32":
+            from contextlib import nullcontext
+
+            return nullcontext()
+        if self.cfg.precision == "bf16":
+            return autocast_ctx(self.device)
+        raise ValueError(f"unknown precision {self.cfg.precision!r}")
 
     def train_step(self) -> tuple[float, float, float]:
         self.model.train()
@@ -244,7 +273,7 @@ class Trainer:
         for micro in range(self.cfg.batch.grad_accum):
             data_step = self.step * self.cfg.batch.grad_accum + micro
             x, y = self.train_loader.get_batch(data_step, self.cfg.batch.micro_batch, self.device)
-            with autocast_ctx(self.device):
+            with self._autocast():
                 logits, loss = self.model(x, y)
                 if z_loss_weight:
                     # PaLM '22 z-loss: penalize log Z (the softmax normalizer) growing large,
@@ -266,6 +295,9 @@ class Trainer:
 
     @torch.no_grad()
     def evaluate(self) -> float:
+        """Deliberately NOT gated by `precision` -- eval always ran in plain fp32 (no autocast)
+        even before Wave E's precision knob existed, so every wave's val_loss stays measured
+        the same way regardless of what precision a given run trained under."""
         self.model.eval()
         losses = [self.model(x, y)[1].item() for x, y in self._eval_batches]
         self.model.train()
@@ -277,7 +309,7 @@ class Trainer:
         for prompt in self.cfg.sampling.prompts:
             ids = self.tokenizer.encode(prompt).ids
             idx = torch.tensor([ids], dtype=torch.long, device=self.device)
-            out = self.model.generate(
+            out = self._raw_model.generate(
                 idx, max_new_tokens=self.cfg.sampling.max_new_tokens, temperature=0.8, top_k=40
             )
             lines.append(f"--- prompt: {prompt!r} ---\n{self.tokenizer.decode(out[0].tolist())}\n")
@@ -362,7 +394,7 @@ class Trainer:
             datetime.date.today().isoformat(),
             self.cfg.phase,
             self.cfg.tier,
-            round(self.model.num_params() / 1e6, 2),
+            round(self._raw_model.num_params() / 1e6, 2),
             self.cfg.baseline_run,
             self.cfg.variable_changed,
             round(self.tokens_seen / 1e6, 2),

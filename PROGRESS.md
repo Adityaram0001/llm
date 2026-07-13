@@ -5,12 +5,42 @@
 
 **Active phase:** Phase 4 is **done** (milestone M1 declared). Phase 5
 (`docs/phases/phase5_ablations.md`) is **in-progress**: seed-noise study done (D-035), **Wave A
-done (D-036)**, **Wave B done (D-037)**, **Wave C done (D-038)**, **Wave D done (D-039)**.
-**Waves A-D done = the M2 milestone is DECLARED.** Wave E (efficiency & memory: bf16 vs fp32,
-grad checkpointing, micro-batch/accum equivalence, weight tying, torch.compile attempt,
-activation-memory-vs-seq-len) is next — measurement-heavy, less new-code-heavy than C/D.
+done (D-036)**, **Wave B done (D-037)**, **Wave C done (D-038)**, **Wave D done (D-039)**, **Wave
+E done (D-040)**. **Waves A-D done = the M2 milestone is DECLARED** (Wave E isn't part of M2's
+exit criteria but is now done too). Wave F (DeepSeek specials: MoE aux-loss vs aux-loss-free,
+MTP) is next — the flagship-3 wave, needs new model code (routing, MTP head).
 
-**This session (2026-07-13, Wave D):** implemented **Muon** (Jordan '24 Newton-Schulz
+**This session (2026-07-13, Wave E):** implemented the efficiency/memory knobs Wave E needed
+(none existed before): `precision` (bf16/fp32) and `gradient_checkpointing` on `TrainConfig`/
+`Trainer`/`GPT` (checkpointing wraps each block in `torch.utils.checkpoint.checkpoint`, gated on
+training + no KV cache), `compile` (`torch.compile(model)`, guarded try/except; checkpointing
+routed through a new `Trainer._raw_model` reference so save/load never depends on the compiled
+wrapper's state_dict key-naming). Ran 6 short S-tier runs on the RTX 5090 (~28 min wall-clock)
+plus a standalone `scripts/bench_activation_memory.py` seq_len sweep (new script). **Result
+(D-040): four of five axes are NULL results on loss by design (efficiency knobs shouldn't change
+what's computed) — the real findings are speed/memory numbers.** bf16 and torch.compile are both
+free speed wins (~35% and ~18% respectively vs their disabled state, zero quality cost).
+Gradient checkpointing costs ~27% speed at this size but gives a consistent **~1.72x peak-memory
+reduction at every seq_len**, buying one more doubling of context before OOM on the 5090's 32GB.
+Micro-batch/grad-accum factorization is loss-invariant (as it should be) but NOT wall-clock-
+invariant — over 2x spread between the fastest (mb=128/accum=1) and slowest (mb=32/accum=4)
+factorization of the identical effective batch, confirming D-022's launch-overhead-bound finding
+and giving a concrete rule (prefer the largest micro-batch that fits). Weight tying off shows a
+real quality win (-0.0278) but is honestly flagged as NOT param-matched (+31.6% params) so
+doesn't settle the tying-vs-quality question cleanly — a param-matched rerun is a flagged
+follow-up, not done this wave. New: `precision`/`gradient_checkpointing`/`compile` fields
+(`train/config.py`), `_autocast`/`_raw_model`/`compile_status` (`train/trainer.py`),
+`gradient_checkpointing` attribute + block-wrap (`model/gpt.py`), `scripts/
+bench_activation_memory.py`, `scripts/plot_wave_e.py`, 6 `configs/train_s_wave_e_*.yaml` +
+`configs/model_s_notie.yaml`, `docs/results/wave_e_efficiency_memory.png`, `docs/results/
+wave_e_activation_memory{,_gradckpt}.csv`, +6 tests (89 local / 64 remote-cuda, all pass).
+Also fixed (not a decision, logged in D-040's note): a trailing-slash rsync bug that briefly
+created a stray incomplete `llmlab/` package on the remote pod, shadowing the real one and
+breaking test collection — cleaned up, no project code affected.
+**GPU LEFT RUNNING (singapore-b:25864) — user must stop it to stop billing** once satisfied
+everything synced down correctly; nothing else pending on it this session.
+
+**Earlier same day (Wave D):** implemented **Muon** (Jordan '24 Newton-Schulz
 orthogonalization, hybrid with AdamW for embeddings/norms per the nanoGPT speedrun recipe) and
 **Lion** (Chen '23 sign-based update) as new optimizers (`src/llmlab/train/optimizers.py`),
 generalized `Trainer` to a list-of-optimizers design, generalized the lr schedule to dispatch
@@ -278,8 +308,17 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   not rescaled (confirmed, though the 1M-tok/step point has an unscaled-warmup confound). Lion's
   result flagged as untuned, not a real verdict against it. Figure:
   `docs/results/wave_d_optimizers_schedules.png`. 13 runs registered, +15 tests (96 pass).
-- [ ] Wave E — Efficiency & memory (bf16 vs fp32, grad checkpointing, micro-batch/accum
-  equivalence, weight tying, torch.compile attempt, activation-memory-vs-seq-len)
+- [x] Wave E — Efficiency & memory (D-040): 6 S-tier runs + a standalone memory-sweep benchmark,
+  new code (`precision`/`gradient_checkpointing`/`compile` on `TrainConfig`/`Trainer`/`GPT`).
+  4/5 axes NULL on loss by design (efficiency knobs, shouldn't change what's computed) — real
+  findings are speed/memory: **bf16 and torch.compile are free speed wins** (~35%/~18% faster
+  than disabled, zero quality cost); **gradient checkpointing** costs ~27% speed at this size for
+  a consistent **~1.72x peak-memory reduction** at every seq_len (buys one more context-length
+  doubling before OOM on the 5090); **micro-batch/accum factorization is loss-invariant but NOT
+  wall-clock-invariant** (>2x spread between fastest/slowest factorization of the same effective
+  batch — always prefer the largest micro-batch that fits); **weight tying off** shows a real
+  quality win (-0.0278) but isn't param-matched (+31.6% params), so doesn't settle the question
+  cleanly (flagged follow-up). Figure: `docs/results/wave_e_efficiency_memory.png`.
 - [ ] Wave F — DeepSeek specials (MoE w/ aux-loss vs aux-loss-free, MTP) — needs RW-5 fixed for
   full context-length work but MoE/MTP themselves don't require it
 - [ ] Wave G — Data & scaling (multi-epoch overfitting lab, dictionary ablation, RW-4 domain-mix
