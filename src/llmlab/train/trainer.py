@@ -142,6 +142,19 @@ class Trainer:
         self.device = torch.device(cfg.device) if cfg.device else get_device()
         set_seed(cfg.seed)
 
+        # D-043: micro_batch=16 is the Mac-tuned plateau (D-022, MPS-specific) -- on a rented
+        # CUDA GPU it leaves real throughput on the table (5090 S-tier sweet spot is mb=64, ~4x
+        # more tok/s per docs/CLOUD_GPUHUB.md's sweep). Waves A-C's configs missed this despite
+        # it already being documented; a runtime nag is harder to miss than a doc. Not a hard
+        # error -- some ablations (e.g. Wave E) deliberately vary micro_batch, including =16.
+        if self.device.type == "cuda" and cfg.batch.micro_batch <= 16:
+            print(
+                f"WARNING: micro_batch={cfg.batch.micro_batch} on cuda -- this is the Mac/MPS-"
+                "tuned default, not the cloud sweet spot. See docs/CLOUD_GPUHUB.md section 10 "
+                "(S-tier RTX 5090 sweet spot is mb=64) before assuming this run is at full "
+                "throughput. Ignore if micro_batch is the deliberate ablation variable."
+            )
+
         model_cfg = ModelConfig.from_yaml(str(ROOT / cfg.model_config))
         self.model = GPT(model_cfg).to(self.device)
         self.model.gradient_checkpointing = cfg.gradient_checkpointing

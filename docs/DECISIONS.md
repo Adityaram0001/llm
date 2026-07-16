@@ -1546,3 +1546,97 @@ the "keep on pod too" default to "delete after verified push"; or if a future ru
 fork point after the fact — add its run_id to `push_checkpoints.sh`'s `FORK_POINTS` arg and
 re-run (rclone only pushes the newly-full checkpoint, cheap).
 
+## D-042 — wandb turned on: account credentials in `.env`, all 33 offline runs synced, `--wandb-online` added for live cloud monitoring  (2026-07-16, phase 5)
+**Decision:** User created a wandb account and provided `WANDB_API_KEY` this session. Stored in
+root `.env` (gitignored, same file as R2 credentials, D-026) + placeholder added to
+`.env.example`. New doc `docs/WANDB.md` covers the full setup for future sessions. Three parts:
+
+1. **Entity correction (verified via API, not assumed):** the user-provided
+   `WANDB_ENTITY=adityaram0001` is invalid — `adityaram0001` is the account's *username*, not an
+   entity slug. Queried `wandb.Api().viewer`/`api.default_entity` directly and found the real
+   entity is `adityaram0001-bbiq-technologies-private-limited` (an org/business entity the
+   account is scoped under — the account has no separate personal entity). Using the wrong value
+   silently broke every sync: the CLI printed `Syncing: ... done.` for all 33 runs on the first
+   attempt, but the pod's debug log showed every single one had actually failed server-side
+   (`CommError: entity adityaram0001 not found during upsertBucket`) — **the CLI's "done." only
+   means the local process exited, not that the upload succeeded.** Caught by checking
+   `api.runs(...)` afterward instead of trusting the sync command's own stdout — a second real
+   instance (after D-023, D-022's list-aliasing bug, D-032's incomplete sweep) of this project's
+   working pattern: verify a claimed-successful operation against real state, not the tool's own
+   "done" message. `.env` corrected + comment added explaining why, re-ran, then re-verified via
+   `api.runs('adityaram0001-bbiq-technologies-private-limited/llm-lab')` — **33/33 runs present,
+   all `state=='finished'`, spot-checked values matching known results** (e.g.
+   `wave-a-postnorm`'s synced val_loss ≈6.88 matches D-036's stagnation finding).
+2. **Historical sync**: `scripts/cloud/archive_checkpoints.py`'s sibling script
+   `scripts/cloud/wandb_sync.sh` — scp's the Mac's `.env` to the pod, then runs `wandb sync` on
+   every `experiments/*/wandb/offline-run-*` directory found there (all offline runs have always
+   lived nested inside each run's own folder, per `trainer.py`'s `dir=str(run_dir)`, NOT a
+   top-level `wandb/` — `sync_down.sh`'s dedicated top-level-`wandb/`-pull step has been silently
+   dead code all along, harmless since the main `rsync experiments/` already covers the real
+   path). Project name stays `"llm-lab"` (D-005's original choice, `TrainConfig.wandb_project`
+   default) — deliberately NOT overridden by any env var, so it can't drift per-machine.
+3. **Live monitoring going forward**: added `--wandb-online` to `scripts/train.py` (mirrors the
+   existing `--device` override pattern) — overrides one run's `wandb_mode` to `"online"` at
+   launch without touching D-009's offline-by-default for every other run. Requires
+   `WANDB_API_KEY` present wherever `train.py` runs; `wandb_sync.sh` pushing `.env` to the pod
+   covers that for cloud runs.
+
+**Options considered:** making online the global default once a key exists (rejected — the same
+`.env` now lives on the Mac too, so this would silently put every local smoke-test/dev run
+online, reversing D-009's deliberate offline-by-default without being asked); a new
+`WANDB_PROJECT` env var (rejected — code always passes `project=` explicitly to `wandb.init()`,
+so an env var would either be ignored or, worse, invite a future accidental override of D-005's
+established project name).
+
+**Why this matters beyond the fix itself:** the wrong entity would have kept silently "succeeding"
+indefinitely — nothing in the CLI's own output would ever have surfaced the failure. Any future
+wandb-related script in this project should verify against `wandb.Api()` after a sync/init, not
+just check the process exit code or stdout.
+
+**Revisit if:** the account ever gains a real personal entity (unlikely for an org-scoped
+account) — re-check `api.default_entity` before assuming `WANDB_ENTITY` is still correct.
+
+## D-043 — Confirmed: 16 of Waves A/B/C's cloud runs used the Mac-tuned micro_batch=16, not the 5090's mb=64 sweet spot; added a runtime warning since the doc alone got missed  (2026-07-16, phase 5)
+**Decision:** While setting up wandb (D-042), grepped every `configs/train_s_wave_*.yaml`'s
+`micro_batch` value and found the exact scenario `docs/CLOUD_GPUHUB.md` §10 already warned
+about (written 2026-07-12, before Wave A even ran) had actually happened, silently, for two full
+waves:
+- **Wave A (4 runs), Wave B (4 runs), Wave C (4 runs, MHA/GQA2/MQA/MLA) — all 12 used
+  `micro_batch=16`** (the Mac/MPS-tuned plateau value, D-022), not the RTX 5090's measured S-tier
+  sweet spot of `micro_batch=64` (~629,837 tok/s vs whatever mb=16 achieves — the sweep in
+  CLOUD_GPUHUB.md §10 shows throughput scaling hard with micro-batch on CUDA, unlike Mac's flat
+  D-022 curve, so this is a real, not cosmetic, gap).
+- **Wave D onward (starting `wave_d_control`) already self-corrected to `micro_batch=64`** —
+  nobody flagged this explicitly at the time, it just happened to get fixed. Wave E's own
+  micro-batch/accum-factorization axis (mb=32/64/128) is the one legitimate exception where a
+  non-64 value is the deliberate independent variable, not a mistake.
+- **None of Waves A-C's quality verdicts are affected** — val_loss is compute-identical
+  regardless of micro-batch/accum factorization (this is exactly what Wave E's own ablation
+  independently confirmed, D-040). The only cost was wall-clock/GPU-hours: those 12 runs likely
+  ran at a small fraction of the 5090's achievable throughput for no benefit, i.e. paid-for GPU
+  time was left on the table, not a scientific error.
+
+**Fix:** added a runtime warning in `Trainer.__init__` (`src/llmlab/train/trainer.py`) — prints
+loudly whenever `device.type == "cuda"` and `cfg.batch.micro_batch <= 16`, pointing at
+CLOUD_GPUHUB.md §10. Not a hard error (Wave E's deliberate low-micro-batch runs would trip a
+naive check, though none of them are actually ≤16 in practice — the threshold was chosen to
+match the one real known-bad value, not to fire on every small micro-batch). Also strengthened
+CLOUD_GPUHUB.md §10 with an explicit "this already happened" callout above the sweet-spot table.
+
+**Why a doc wasn't enough:** the sweet-spot table and its warning sentence were already written
+in CLOUD_GPUHUB.md *before* Wave A ran (2026-07-12) — reading it wasn't the failure mode, reusing
+an earlier wave's YAML as a copy-paste starting point (which still had the Mac default) was. A
+runtime nag fires regardless of which doc did or didn't get re-read, which is a stronger
+guarantee for a project doing many more waves ahead (F, G, plus M/L-tier confirmation runs).
+
+**Options considered:** retroactively re-running Waves A-C at mb=64 (rejected — their val_loss
+verdicts are already correct and equal-tokens/equal-wallclock comparisons within each wave are
+still internally consistent since every run in a given wave used the same micro_batch; re-running
+would cost real GPU-hours to fix a number that was never wrong, only slower than it needed to be);
+doc-only fix (rejected — already tried, already failed once); hard error instead of a warning
+(rejected — would break Wave E's legitimate micro-batch ablation and any future one like it).
+
+**Revisit if:** a future wave's config generation becomes scripted/templated rather than
+hand-copied YAML — the sweet-spot value could then be injected automatically per-device instead
+of relying on a human noticing the warning.
+

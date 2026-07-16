@@ -10,6 +10,29 @@ E done (D-040)**. **Waves A-D done = the M2 milestone is DECLARED** (Wave E isn'
 exit criteria but is now done too). Wave F (DeepSeek specials: MoE aux-loss vs aux-loss-free,
 MTP) is next — the flagship-3 wave, needs new model code (routing, MTP head).
 
+**Later same day (2026-07-16, wandb turned on + a real cloud-throughput gap fixed):** user
+created a wandb account and gave credentials — stored in `.env`/`.env.example` (D-042), new
+`docs/WANDB.md` written for future sessions to reference, added to README's map + quick-start.
+**Caught a real bug before declaring success**: the user-given `WANDB_ENTITY=adityaram0001` is
+invalid (that's the username, not the entity) — the first sync attempt printed "done." for all
+33 offline runs but every one had actually failed server-side (verified via the pod's debug
+log, not just the CLI's own output). Corrected the entity by querying `wandb.Api().viewer`
+directly (real entity: `adityaram0001-bbiq-technologies-private-limited`), re-ran
+`scripts/cloud/wandb_sync.sh` (new script), and this time independently verified via
+`api.runs(...)`: **33/33 runs present, all finished, spot-checked values match known results.**
+Added `--wandb-online` to `scripts/train.py` (mirrors `--device`) so any future cloud run can
+stream live with one flag, without flipping D-009's offline-by-default for every other run.
+**Also found and fixed a real efficiency gap while doing this**: grepped every wave config's
+`micro_batch` and confirmed **all 12 of Waves A/B/C's S-tier cloud runs used the Mac-tuned
+`micro_batch=16` instead of the 5090's measured `mb=64` sweet spot** — a documented warning in
+`docs/CLOUD_GPUHUB.md` (written before Wave A even ran) got missed because later waves' configs
+were copy-pasted from earlier ones. Quality verdicts are unaffected (loss is factorization-
+invariant, D-040's own finding), only wall-clock/GPU-hours were left on the table. Wave D
+onward already self-corrected to `mb=64`. Fixed properly this time with a **runtime warning**
+(`Trainer.__init__`, `src/llmlab/train/trainer.py`) that fires whenever `device=="cuda"` and
+`micro_batch<=16`, since the doc alone already proved insufficient (D-043). **Read the runtime
+warning if it ever prints — it means a config needs fixing before spending real GPU-hours.**
+
 **This session (2026-07-16, checkpoint archival to R2):** user flagged that 40 of 48 runs'
 checkpoints existed ONLY on the gpuhub pod's data disk (7.2GB, growing every wave, never backed
 up) — built `scripts/cloud/archive_checkpoints.py` + `scripts/cloud/push_checkpoints.sh`

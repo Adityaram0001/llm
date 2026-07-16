@@ -210,6 +210,14 @@ on cost at every tier and every sequence length tested, 512 through 8192. Use it
 runs.** Treat the RTX 4080 tier as a near-free dry-run/debugging sandbox (a smoke test costs
 about a penny on any of the three GPUs).
 
+**⚠ CONFIRMED HAPPENING (D-043, 2026-07-16): 16 of Wave A/B/C's S-tier cloud runs used the
+Mac-tuned `micro_batch=16` instead of the 5090's `mb=64` sweet spot below — this exact warning
+was already written here at the time and still got missed, because copying an old config is
+easier than reading a doc.** `Trainer.__init__` now prints a runtime warning whenever
+`device=="cuda"` and `micro_batch<=16` (src/llmlab/train/trainer.py) — if you see it, actually
+stop and fix the config before spending GPU-hours at ~4x-lower throughput than necessary. Wave
+D onward already self-corrected to `mb=64`; this note exists so Wave F/G don't regress.
+
 **Sweet-spot micro_batch, all three GPUs, same extreme methodology (every sweep run to real OOM
 — set explicitly before a real run, different from the Mac-tuned D-022 default of `micro_batch=16`
 still in `configs/train_s_*.yaml`):**

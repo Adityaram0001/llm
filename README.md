@@ -29,6 +29,7 @@ next.
 | `docs/EXPERIMENTS.md` | Run/ablation protocol + registry schema |
 | `docs/CLOUD.md` | Rented-GPU playbook (provider-agnostic) + Mac↔Linux portability rules |
 | `docs/CLOUD_GPUHUB.md` | gpuhub-specific playbook: setup script, image workflow, measured GPU capacity/pricing tables |
+| `docs/WANDB.md` | wandb dashboard setup: credentials, online-vs-offline per run, syncing a pod's offline runs, how it relates to R2 |
 | `docs/results/` | Ablation figures, `cloud_gpu_benchmarks.csv` (raw GPU sweep data), `recipe.md` (phase 9 input, once phase 5 lands) |
 | `docs/learnings/` | Discussion-session notes (dated, indexed in `INDEX.md`) — the "what clicked" record, separate from decisions |
 | `docs/phases/phaseN_*.md` | Self-contained spec for each phase (one spec ≈ one AI chat) |
@@ -62,7 +63,11 @@ playbook, credentials in `scripts/cloud/remote.env`):
 ```bash
 python scripts/find_batch_size.py --config configs/model_s.yaml   # calibrate micro_batch first
 ./scripts/cloud/sync_up.sh && ./scripts/cloud/sync_down.sh         # data/checkpoint sync
+python scripts/train.py --config configs/train_s_baseline.yaml --wandb-online  # live dashboard
+./scripts/cloud/push_checkpoints.sh && ./scripts/cloud/wandb_sync.sh           # archive + sync
 ```
+Training logs to wandb (offline by default, `--wandb-online` streams live) plus local
+`metrics.jsonl` always — see `docs/WANDB.md`. Checkpoints archive to R2 — see D-041.
 
 ## Working model
 

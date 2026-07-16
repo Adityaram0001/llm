@@ -30,6 +30,12 @@ def main() -> None:
         "--device", type=str, default=None, choices=["cpu", "mps", "cuda"],
         help="override the config's device (e.g. --device cpu for the portability smoke test)",
     )
+    parser.add_argument(
+        "--wandb-online", action="store_true",
+        help="override the config's wandb_mode to 'online' for live dashboard monitoring "
+        "(D-009 default is offline; use this on cloud runs — needs WANDB_API_KEY in .env, "
+        "see docs/WANDB.md)",
+    )
     args = parser.parse_args()
 
     if args.resume:
@@ -39,6 +45,8 @@ def main() -> None:
         cfg = TrainConfig.from_yaml(run_dir / "config.yaml")
         if args.device:
             cfg.device = args.device
+        if args.wandb_online:
+            cfg.logging.wandb_mode = "online"
         resume = True
     else:
         if args.config is None:
@@ -46,6 +54,8 @@ def main() -> None:
         cfg = TrainConfig.from_yaml(args.config)
         if args.device:
             cfg.device = args.device
+        if args.wandb_online:
+            cfg.logging.wandb_mode = "online"
         slug = args.config.stem.removeprefix("train_").replace("_", "-")
         run_id = args.run_id or f"{datetime.date.today():%Y%m%d}_p{cfg.phase}_{slug}"
         run_dir = ROOT / "experiments" / run_id
