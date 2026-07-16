@@ -1,0 +1,177 @@
+{
+  "checkpoint": "experiments/20260717_p6_s-p6-baseline-milestones/ckpt/step_001500.pt",
+  "step": 1500,
+  "suite": "core",
+  "generated_at": "2026-07-16T21:59:22",
+  "results": {
+    "perplexity": {
+      "books": {
+        "ppl": 67.27883340625701,
+        "bits_per_byte": 1.5811868237396334,
+        "n_tokens": 80384,
+        "n_bytes": 308691
+      },
+      "dictionary": {
+        "ppl": 18.108365577182205,
+        "bits_per_byte": 1.2898752620963927,
+        "n_tokens": 98816,
+        "n_bytes": 320117
+      }
+    },
+    "dictionary_probes": {
+      "n_examples": 200,
+      "definition_completion_ppl": 98.23025073721804,
+      "mc_accuracy": 0.27,
+      "mc_chance": 0.25,
+      "cloze_ppl": 1238.6311424476405,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "domain_probes": {
+      "n_examples": 24,
+      "mc_chance": 0.25,
+      "overall_accuracy": 0.25,
+      "finance_term_accuracy": 0.125,
+      "proverb_accuracy": 0.5,
+      "advice_accuracy": 0.125
+    },
+    "generation": {
+      "temperature": 0.8,
+      "top_p": 0.95,
+      "max_new_tokens": 80,
+      "samples": [
+        {
+          "prompt": "Once upon a time",
+          "text": ", we\nshall see there are two species of things in us which is called \u201cthrough\nthe form of one spiritual things\u201d; and these _imitation_ whereof we\nlook upon our object as the other.\n\nAgain: in our minds there is a real difference in the sense of the\nthing in a particular.\n\nBut it is not necessary to realise the faculty of knowing",
+          "distinct_1": 0.6875,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "It was a dark and stormy night",
+          "text": ", and when it were very short;\nwhere it is said that the enemies of the world should be so deeply\nstaked, and that when the enemy of the enemy piled them, and the\nconfusion which was due to them would still have been their prey.\n\nThe same day of peace was our march, and our enemy was after the\nbattle, while the Persians were coming",
+          "distinct_1": 0.625,
+          "distinct_2": 0.9240506329113924,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "In a small village at the edge of the forest",
+          "text": ", a stray wall of the town, not of the Sun or of the Folf: a maid of the Richard Witch.\n\n**Inhrew** (n.): A scatter of silk or silk; a tone or noise in the midst of lakes; a little tale.\n\n**Inhitch** (n.): A bag of sandstong, or",
+          "distinct_1": 0.575,
+          "distinct_2": 0.8354430379746836,
+          "seq_rep_4": 0.06493506493506493
+        },
+        {
+          "prompt": "The old man had lived alone for many years",
+          "text": " before the\nanswer of the Duke of Bestia. It is clear that a town, or a king, who\nis called in the very mean time, should be found to be the lord of\nhis army. After this, the year, it is said, was to be the best of the\nfarms, the first of these, in the days of the last, was not",
+          "distinct_1": 0.5875,
+          "distinct_2": 0.8987341772151899,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "ephemeral (adjective):",
+          "text": " and\nhe is only the person who has for many a man to work up for his\nown or to work in his own person, in the word he ought to be \"done,\"\nhe might be answered.\n\nWhen all these circumstances of life are present, the course of\ncontingencies is rather to be regarded as the means of\ndisorder and labor, than to the",
+          "distinct_1": 0.65,
+          "distinct_2": 0.9493670886075949,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "prudence (noun):",
+          "text": " Vesposite (compare Euthyphri) (1)\n(Hes,) for his \"hesitity\" (The) that he was eulogized by the name of\nan \"suthan.\" (2)\n\n (2) \"Nalaeias\" (d) of the \";[Greek: grabbiaoi\" (chs",
+          "distinct_1": 0.6625,
+          "distinct_2": 0.9367088607594937,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "avarice (noun):",
+          "text": " I.; of the soil of the Buhiel.; The richwater sac ( Laca and Hacophophanus ); The balche ( Sabella quezopus , ), and the golden-staboo ( E. b. ). See Cophead .\n\n**Baage** (n.): A small seagraves or small wool",
+          "distinct_1": 0.75,
+          "distinct_2": 0.9873417721518988,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "diligence (noun):",
+          "text": " the rose of a litter (see _Iraslla ten_, _solicento_), who\nhad the sound of a wolf; and at which, when it was on the side of the\nstandard, it strenuously shered, _Atercion de tesquit_, being always\noverstocked with the blow, so that she",
+          "distinct_1": 0.775,
+          "distinct_2": 0.9873417721518988,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Of all the virtues a man may possess, none is more essential than",
+          "text": " that he\nhas a right to make good the possibility of one's worth; and this is so\nfar, that this is what the objects of reason and the understanding are\nso, and will not be so in the mind, that it is impossible for a man to\napply from his own duties to his own interests. But to say thus:\n\nBut this is not a matter",
+          "distinct_1": 0.6375,
+          "distinct_2": 0.9493670886075949,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Philosophy teaches us that true happiness consists in",
+          "text": " the\ndifferentity of the sentiment of every man. Again, it is not in\nsuch a case that it is a right and is naturally so. Thus, then,\naccording to the general law of nature, the truth is merely that we\nought to do with regard to a duty of itself, and therefore not to\nit, as to expect that a man to do his property to",
+          "distinct_1": 0.5625,
+          "distinct_2": 0.9746835443037974,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "It is the nature of the human mind to seek",
+          "text": " with\npleasure, which the mind is apt to express in pleasure; and is the\ndifference in that which gives pleasure, and that which is in the soul\nin pleasure, is always in the object. But if this be the case, or the\nlove of pleasure, the pleasure or pleasure of the agent is greater, the\nexplanation of the body is less true. What the soul",
+          "distinct_1": 0.4875,
+          "distinct_2": 0.8860759493670886,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Reason, rightly employed, is the surest guide to",
+          "text": " the\nintellect. The man who has already lived is a man, and must be born in\nthe same age of his life, who has been fully taken and satisfied; that\nof all the rest of the world the man who is over, and that of the man\nthat is afflicted with the love of death, is the first one.\n\nWhatsoever is excited by love,",
+          "distinct_1": 0.5875,
+          "distinct_2": 0.9367088607594937,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The first rule of saving money is",
+          "text": " a thing\ncapable of the same law of conscience. It is too probable that the\nconsideration of the place of duty cannot be lawfully founded on\nextreme good, because it is not free from it; for in every particular\ninstance it is not by law. The right of right cannot be pure, and the\nsame good must be, not of duty, in so far as it is",
+          "distinct_1": 0.5875,
+          "distinct_2": 0.9113924050632911,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "A wise investor always considers",
+          "text": " of others as having a small\nand dangerous idea, and of the ordinary nature of the country, both in\na public assembly and in the government, that of the people, which, in\nthe governing system, is a peculiarly evil and greater. But, as I\nbelieve, all governments are either opposed by laws or by law; or\nonly those of a few, who have really",
+          "distinct_1": 0.65,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The surest path to financial independence is",
+          "text": " the most\nprogressive aim, of which, if we are to consider, is the most\ngreat, and the most complete and only the most necessary in the\ndevelopment of its collective life.\n\nFrom this species of evolution there is an ideal and ideal by which\nall its phenomena are purely common to all, the race of ideals and\nand the race of individuals. It is also",
+          "distinct_1": 0.5625,
+          "distinct_2": 0.9240506329113924,
+          "seq_rep_4": 0.0
+        }
+      ],
+      "aggregate": {
+        "distinct_1": 0.38333333333333336,
+        "distinct_2": 0.8090075062552127,
+        "seq_rep_4": 0.006683375104427736
+      }
+    },
+    "benchmarks": {
+      "hellaswag": {
+        "n_examples": 200,
+        "n_skipped_too_long": 0,
+        "accuracy": 0.245,
+        "chance": 0.25
+      },
+      "lambada_style": {
+        "n_examples": 150,
+        "last_word_accuracy": 0.006666666666666667
+      }
+    }
+  },
+  "timings_s": {
+    "perplexity_books": 1.8,
+    "perplexity_dictionary": 2.22,
+    "dictionary_probes": 11.17,
+    "domain_probes": 0.53,
+    "generation": 9.29,
+    "hellaswag": 9.65,
+    "lambada_style": 2.89
+  },
+  "total_wall_s": 37.55
+}

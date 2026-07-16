@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 import yaml
 
 from llmlab.model import GPT, ModelConfig
@@ -99,6 +100,7 @@ def make_tiny_trainer(
     seed: int = 0,
     optim_overrides: dict | None = None,
     model_overrides: dict | None = None,
+    milestone_steps: list[int] | None = None,
 ) -> Trainer:
     model_cfg_path = tmp_path / "model_tiny.yaml"
     model_cfg_path.write_text(
@@ -135,6 +137,7 @@ def make_tiny_trainer(
         sampling={"sample_every": 1000, "prompts": ["hi"]},
         logging={"log_every": 5, "wandb_mode": "disabled"},
         checkpoint_every=5,
+        milestone_steps=milestone_steps or [],
         device="cpu",
     )
     return Trainer(cfg, tmp_path / run_name)
@@ -313,6 +316,31 @@ def test_evaluate_val_loss_excludes_aux_terms(tmp_path):
     val_low = t_low.evaluate()
     val_high = t_high.evaluate()
     assert val_low == pytest.approx(val_high, abs=1e-5)
+
+
+def test_milestone_steps_saves_named_snapshots_without_touching_latest_or_best(tmp_path, monkeypatch):
+    """Phase 6's eval_deep_dive notebook needs early/mid/final checkpoints of ONE run --
+    `milestone_steps` must save distinct `step_NNNNNN.pt` files (not overwrite each other or
+    latest.pt/best.pt) at exactly the requested step counts."""
+    import llmlab.train.trainer as trainer_module
+
+    # `fit()` appends a row to the REAL experiments/registry.csv via a module-level constant
+    # (not `run_dir`-relative) -- redirect it for this test only, or every run of this test
+    # pollutes the project's actual lab record with a fake "run1" row (caught the hard way:
+    # this exact test did that on its first run, cleaned up by hand, see DECISIONS.md D-046).
+    monkeypatch.setattr(trainer_module, "REGISTRY_PATH", tmp_path / "registry.csv")
+
+    trainer = make_tiny_trainer(tmp_path, "run1", milestone_steps=[5, 15])
+    trainer.fit()
+    ckpt_dir = trainer.run_dir / "ckpt"
+    assert (ckpt_dir / "step_000005.pt").exists()
+    assert (ckpt_dir / "step_000015.pt").exists()
+    assert (ckpt_dir / "latest.pt").exists()
+    # milestone snapshots are independent files, not aliases of latest.pt at that instant
+    early = torch.load(ckpt_dir / "step_000005.pt", map_location="cpu")
+    late = torch.load(ckpt_dir / "step_000015.pt", map_location="cpu")
+    assert early["step"] == 5
+    assert late["step"] == 15
 
 
 def test_moe_resume_reproduces_the_same_loss_trajectory(tmp_path):

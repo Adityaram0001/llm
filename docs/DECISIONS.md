@@ -1828,3 +1828,122 @@ call).
 scaling law is worth re-running with per-size lr (muP-style) or fresh (non-repeated) tokens if
 a more rigorous alpha is ever needed; the equal-wall-clock MoE question (parking lot) gets
 picked up, since it also touches the "fixed tokens vs fixed compute" theme this wave surfaced.
+
+
+## D-046 — Phase 6 (evaluation suite): built `src/llmlab/eval/` + `scripts/evaluate.py`; three decision points resolved with the user; frozen the eval battery  (2026-07-16/17, phase 6)
+**Decision:** Implemented the phase 6 spec's full "core" eval battery and CLI (`docs/phases/
+phase6_evaluation.md`): `src/llmlab/eval/{scoring,perplexity,dictionary_probes,domain_probes,
+generation,benchmarks,report}.py` + `scripts/evaluate.py --ckpt <path> [--suite core]`, writing
+`eval_results.json` into the checkpoint's run folder. Covers every deliverable: val ppl +
+bits-per-byte on books and dictionary SEPARATELY (new `--dictionary-only` flag on
+`scripts/tokenize_corpus.py`, mirroring Wave G's `--books-only`, → `dictionary_only_val.bin`,
+99,011 tokens); 3 dictionary probes (definition-completion ppl, 4-way MC-by-loglik, cloze);
+domain probes (finance/wisdom, RW-4); a 15-prompt generation battery (temp 0.8/top-p 0.95, per
+the spec's own decision point) with distinct-n + seq-rep-4 diversity metrics; HellaSwag (real
+data) and a homemade LAMBADA-style last-word-accuracy probe. **Exit criterion met with large
+margin**: `evaluate.py --suite core` runs in **~38s** on the S-tier baseline checkpoint on MPS
+(spec asked for <10min).
+
+**Three decision points resolved with the user (AskUserQuestion) before implementation, all
+recommended options chosen:**
+1. **HellaSwag data source** — download the real public validation set via `Rowan/hellaswag`
+   on the HF Hub (the original `hellaswag` loading-script repo is deprecated by newer `datasets`
+   versions; this is a maintained parquet mirror of the identical data), subsampled to 200
+   examples per run (seeded shuffle) rather than hand-writing a toy set — the spec names an
+   actual standard benchmark, and reimplementing the SCORING is the lesson, not the data.
+2. **Domain probes authorship** — hand-wrote 24 items (`data/eval/domain_probes.json`: 8
+   finance-term definitions, 8 proverb/maxim completions, 8 sound-advice-vs-nonsense pairs)
+   directly, since phase 7's data factory (the spec's suggested source) doesn't exist yet. This
+   also unblocks Wave G's explicitly-deferred "does the dictionary in the mix improve a 'define
+   X' eval" parking-lot item — same MC-by-loglik mechanism, now available.
+3. **Milestone checkpoints for the eval_deep_dive notebook** — the original `p4_s_baseline` run
+   only ever saved `latest.pt`/`best.pt`, no early/mid/final trio. Added a genuinely new
+   `TrainConfig.milestone_steps: list[int]` field + one `Trainer.fit()` line (saves
+   `ckpt/step_NNNNNN.pt` snapshots alongside, never instead of, latest/best) and re-ran the exact
+   baseline recipe (`configs/train_s_p6_baseline_milestones.yaml`, same seed 1337) on the RTX
+   5090 (singapore-b:25864, confirmed still live and idle from the Wave G session) at
+   `micro_batch=64` (D-043's cloud sweet spot). New run `20260717_p6_s-p6-baseline-milestones`:
+   3m37s wall-clock, final val_loss **3.4954** vs the original baseline's **3.5037** — a 0.0083
+   gap, comfortably inside the D-035 seed-noise floor (0.0150) despite the different
+   micro_batch/grad_accum factorization, confirming D-040's factorization-invariance finding as
+   a bonus reproducibility check.
+
+**Scoring design (`src/llmlab/eval/scoring.py`), shared by every probe:** MC-by-loglik always
+uses LENGTH-NORMALIZED (mean, not summed) log-likelihood — a raw sum is biased toward shorter
+candidates almost by construction, which would silently favor short wrong answers in every MC
+probe (dictionary, domain, HellaSwag alike). Prompt+continuation are tokenized as ONE string
+then split at the prompt boundary (`encode_prompt_continuation`), not encoded separately, since
+BPE merges can differ across a word/whitespace boundary depending on what's concatenated with
+what (the standard lm-eval-harness trick). Continuation scoring reuses `GPT.forward`'s own
+`ignore_index=-1` cross-entropy (masking every target position except the continuation's) rather
+than writing separate softmax/gather code.
+
+**A real bug caught before any test passed (not a wave finding, but the project's now-standard
+"measurement artifact" pattern, D-022/D-023/D-032/D-042/D-043/D-044/D-045 continued)**:
+`perplexity.evaluate_split`'s batched windows crashed `GPT.forward`'s `logits.view(-1, ...)`
+with a stride error. Root cause: slicing `inputs = batch[:, :-1]` / `targets = batch[:, 1:]` off
+the SAME `(B, seq_len+1)` tensor (rather than the trainer's normal two independently-materialized
+`(B, seq_len)` arrays) leaves strides `.view()` can't flatten without a copy — fixed with
+`.contiguous()` on both slices. Also caught a real test-hygiene bug the same session: the new
+`fit()`-based milestone test appended THREE fake "run1" rows to the actual
+`experiments/registry.csv` before being caught, because `Trainer`'s `REGISTRY_PATH` is a
+module-level constant (`ROOT`-relative), not `run_dir`-relative — `fit()` always writes to the
+real project registry regardless of where the run folder itself lives. Fixed by
+`monkeypatch.setattr(trainer_module, "REGISTRY_PATH", tmp_path / "registry.csv")` in the test;
+the 3 spurious rows were removed by hand from `experiments/registry.csv` (confirmed no
+`experiments/run1/` folder ever existed — pure test artifact, not a real run, safe to remove per
+CLAUDE.md's carve-out for a session's own scratch mistakes).
+
+**`notebooks/08_eval_deep_dive.ipynb`** (executes cleanly end to end, ~2min total incl. 3 live
+eval-suite runs) runs the core suite on the new milestone trio (step 150/750/1500) and finds the
+spec's predicted "emergence vs smooth improvement" split cleanly in real numbers: perplexity
+falls smoothly by roughly an order of magnitude at every checkpoint, while every MC-by-loglik
+accuracy (dictionary/domain/HellaSwag) stays within a few points of chance THE WHOLE WAY,
+including at the final checkpoint — a real, not hypothetical, illustration of why a big loss
+drop doesn't guarantee a big accuracy gain at this scale. Domain-probe accuracy is exactly at
+chance throughout for a mechanical reason (this baseline never saw a token of RW-4's domain
+corpus), a clean null result rather than a probe weakness. Exact-match tasks (cloze, LAMBADA-
+style) sit at/near 0.000 even at the final checkpoint — flagged as a likely floor effect at this
+param/token budget, not evidence the probes don't work. Calibration (reliability diagram, ECE)
+computed live over `books_only_val.bin`'s per-token top-1 confidence: final checkpoint is
+well-calibrated (ECE=0.0164, points hug the diagonal) despite low absolute accuracy (0.279) —
+both discussed as different questions (calibration asks "is confidence honest," not "is the
+model good"). A benchmark-contamination discussion section ties every held-out-by-construction
+design choice (whole-document val split, D-012; fixed dictionary 2% val entries; HellaSwag's
+total domain disjointness from a 19th-century book+dictionary corpus) back to why this phase's
+numbers are trustworthy comparisons at all.
+
+**Fixed eval battery FROZEN per the spec's decision point** — no further additions/changes to
+`src/llmlab/eval/` probe content without a new D-entry, since changing the battery
+mid-project would break comparability with every future phase-8/9 checkpoint scored against it.
+Skipped the spec's optional "registry column update" — `experiments/registry.csv`'s schema
+(`docs/EXPERIMENTS.md`) is shared by every phase and already has real consumers (comparison
+notebooks, this session's own registry edits); bolting eval columns onto an append-only CSV with
+existing rows lacking them risks breaking parsers more than it's worth for now. `eval_results.json`
+per run folder is the source of truth; a registry column can be added later as a genuinely
+separate decision if cross-run eval comparison becomes a frequent need (phase 9 candidate).
+
+**New code:** `src/llmlab/eval/` (7 files), `data/eval/domain_probes.json` (24 hand-written
+items), `scripts/evaluate.py`, `TrainConfig.milestone_steps` + one `Trainer.fit()` line,
+`--dictionary-only` on `scripts/tokenize_corpus.py`, `configs/train_s_p6_baseline_milestones.yaml`,
+`notebooks/08_eval_deep_dive.ipynb`, `docs/results/phase6_{eval_deep_dive,calibration}.png`,
++12 tests (`tests/test_eval.py`, 11 tests; +1 milestone-checkpoint test in `tests/
+test_trainer.py`) — 139 total, all pass. 1 new run registered
+(`20260717_p6_s-p6-baseline-milestones`) with a real verdict.
+
+**Milestone M3 declared** (exit criteria met: runs <10min, results JSON schema stable, battery
+frozen, PROGRESS/DECISIONS updated).
+
+**Options considered:** hand-writing a toy HellaSwag-style set instead of the real data
+(rejected by the user — matches the spec's intent of a real, recognized benchmark, not a
+custom one); deferring domain probes to phase 7 (rejected by the user — small effort now,
+unblocks Wave G's deferred item immediately rather than waiting on an unbuilt data factory);
+reusing existing different-run checkpoints as an early/mid/final proxy instead of a fresh
+milestone-snapshot run (rejected by the user — a true single-run trajectory was worth ~4 minutes
+of already-idle cloud GPU time rather than mixing seeds/configs across checkpoints).
+
+**Revisit if:** these small hand-written/subsampled probes (24 domain items, 200 HellaSwag
+examples, 200 dictionary entries) ever need a formal noise floor the way D-035 established one
+for val_loss — not done this phase, flagged in the eval_deep_dive notebook's own discussion;
+phase 7's data factory, once built, could regenerate/expand the domain probes at higher volume
+without changing the frozen battery's STRUCTURE, only its item count.

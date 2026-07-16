@@ -3,17 +3,41 @@
 > Every Claude session reads this first and updates it last. Keep it honest and terse.
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
-**Active phase:** Phase 4 is **done** (milestone M1 declared). **Phase 5
-(`docs/phases/phase5_ablations.md`) is now DONE** — seed-noise study (D-035), Wave A (D-036),
-Wave B (D-037), Wave C (D-038), Wave D (D-039), Wave E (D-040), Wave F (D-044), and **Wave G
-(D-045, this session)** all landed with verdicts; `docs/results/recipe.md` written (consolidates
-every wave for phase 9). One explicitly-deferred sub-item remains: Wave G's dictionary ablation
-("with vs without dictionary in the mix → does 'define X' improve?") needs phase-6 eval probes
-that don't exist yet — the phase-5 spec itself flagged this as OK to defer ("can run later"), so
-it's parked as a phase-6 pickup item, not a gap in phase 5's exit criteria (which only required
-waves A-D + recipe.md, both satisfied). **Phase 6 (evaluation suite) is next.**
+**Active phase:** Phases 0-5 are **done** (milestones M1/M2 declared). **Phase 6
+(`docs/phases/phase6_evaluation.md`) is now DONE — M3 declared (D-046, this session).** Built
+`src/llmlab/eval/` + `scripts/evaluate.py --suite core` (runs in ~38s, well under the 10min exit
+criterion); the fixed eval battery is now FROZEN per the spec's decision point. Wave G's
+deferred dictionary-ablation item (D-045: "does the dictionary in the mix improve a 'define X'
+eval?") is now **unblocked** — the dictionary probes it needs exist — but the ablation run
+itself hasn't been executed yet; it's a cheap follow-up (single training-data-mix axis, no new
+model code) available whenever picked up, still parked (see parking lot below). **Phase 7 (data
+factory) is next.**
 
-**This session (2026-07-16, Wave G — data & scaling, LAST wave of phase 5):** resolved RW-4
+**This session (2026-07-16/17, phase 6 — evaluation suite):** built the full core eval battery:
+`src/llmlab/eval/{scoring,perplexity,dictionary_probes,domain_probes,generation,benchmarks,
+report}.py` + `scripts/evaluate.py`. Three decision points resolved with the user up front
+(AskUserQuestion, all recommended options chosen): HellaSwag uses the REAL public validation set
+(`Rowan/hellaswag` on the HF Hub, subsampled 200/run) rather than a hand-written toy set; domain
+probes (finance/wisdom, RW-4) are 24 hand-written items (`data/eval/domain_probes.json`) since
+phase 7's data factory doesn't exist yet to generate them; and the eval_deep_dive notebook's
+early/mid/final trio comes from a genuinely fresh milestone-checkpoint run
+(`20260717_p6_s-p6-baseline-milestones`, new `TrainConfig.milestone_steps`, same seed/recipe as
+`p4_s_baseline`, run on the already-idle RTX 5090) rather than mixing checkpoints from different
+runs. That milestone run's final val_loss (3.4954) reproduced the original baseline (3.5037)
+within the D-035 noise floor — a nice bonus reproducibility check. `notebooks/
+08_eval_deep_dive.ipynb` (executes cleanly) finds the spec's predicted "smooth ppl vs flat
+accuracy" split in real numbers, plus a live calibration/reliability-diagram analysis
+(ECE=0.0164, well-calibrated despite low absolute accuracy) and a benchmark-contamination
+discussion. Caught two real bugs before finishing: a `.view()`/stride crash in the new
+perplexity module (fixed with `.contiguous()`), and a test that was silently appending fake rows
+to the REAL `experiments/registry.csv` (Trainer's `REGISTRY_PATH` is a module-level constant,
+not `run_dir`-relative — fixed via `monkeypatch`, 3 spurious rows removed by hand). Full story:
+D-046. 139 tests pass (was 127). 1 new run registered. **GPU LEFT RUNNING (singapore-b:25864,
+confirmed live at session start, used for ~4 minutes this session) — user must stop it to stop
+billing** once satisfied everything synced down correctly (checkpoints already pulled and
+verified loadable locally).
+
+**Earlier (2026-07-16, Wave G — data & scaling, LAST wave of phase 5):** resolved RW-4
 (open since phase 1): curated **62 public-domain finance/self-help/wisdom-practical books**
 (Adam Smith, Ricardo, Bagehot, Keynes, Ford, Taylor, Samuel Smiles, James Allen, Orison Swett
 Marden, Russell Conwell, Barnum, Hubbard, Ruskin, Booker T. Washington, etc.) from local
@@ -280,7 +304,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 | 3 | Model architecture | `docs/phases/phase3_architecture.md` | done |
 | 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | done |
 | 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | done |
-| 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | todo |
+| 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | done |
 | 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | todo |
 | 8 | Fine-tuning: SFT / LoRA / DPO | `docs/phases/phase8_finetuning.md` | todo |
 | 9 | Capstone: 100M hero run + report | `docs/phases/phase9_capstone.md` | todo |
@@ -455,6 +479,33 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   consolidates every wave's winning choices into phase 9's L-tier hero-run starting config.
   **Phase 5 is now fully DONE.**
 
+## Phase 6 checklist (done)
+
+- [x] `src/llmlab/eval/` + `scripts/evaluate.py --ckpt <path> [--suite core]` — writes
+  `eval_results.json` into the checkpoint's run folder; reads model config + tokenizer from that
+  run folder's own `config.yaml` (no extra CLI flags needed for a normal run). Registry-column
+  update explicitly skipped (D-046: schema-stability risk outweighs the convenience, revisit if
+  cross-run eval comparison becomes a frequent need).
+- [x] Core suite, all sub-items: val ppl + bits-per-byte on books/dictionary SEPARATELY
+  (`perplexity.py`, new `--dictionary-only` tokenize flag → `dictionary_only_val.bin`); 3
+  dictionary probes (`dictionary_probes.py`: definition-completion ppl, 4-way MC-by-loglik,
+  cloze); domain probes (`domain_probes.py` + `data/eval/domain_probes.json`, 24 hand-written
+  finance/proverb/advice items, RW-4); 15-prompt generation battery + distinct-n/seq-rep-4
+  (`generation.py`, temp 0.8/top-p 0.95 frozen per the spec's decision point); HellaSwag (real
+  `Rowan/hellaswag` validation set, 200/run) + homemade LAMBADA-style last-word accuracy
+  (`benchmarks.py`).
+- [x] `notebooks/08_eval_deep_dive.ipynb` — runs the suite live on 3 fresh milestone checkpoints
+  (early/mid/final, new run `20260717_p6_s-p6-baseline-milestones`, D-046); calibration/
+  reliability-diagram analysis (ECE=0.0164); benchmark-contamination discussion. Executes
+  cleanly end to end. Figures: `docs/results/phase6_{eval_deep_dive,calibration}.png`.
+- [x] Decision points: eval battery contents FROZEN after this phase (D-046); generation
+  sampling params (temp 0.8/top-p 0.95) confirmed as-specified.
+- [x] Exit criteria: `evaluate.py --suite core` runs in **~38s** on the baseline checkpoint
+  (spec: <10min); results JSON schema stable; **M3 DECLARED 2026-07-17.**
+- [x] New `TrainConfig.milestone_steps` (Trainer/config.py) — named checkpoint snapshots at
+  specific step counts, alongside (never replacing) latest.pt/best.pt. +12 tests
+  (`tests/test_eval.py` 11, `tests/test_trainer.py` +1) — 139 total, all pass.
+
 ## Rework queue (see CLAUDE.md "Change management")
 
 | ID | What | Why | Fix in phase | Status |
@@ -466,7 +517,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 
 **Open item for next session: `scripts/cloud/gpuhub_setup.sh` has an uncommitted local fix** (D-029's PATH/rclone fix) that was never pushed to GitHub — this caused the exact same bug to reproduce when setting up the RTX 5090 instance via the curl-from-GitHub one-liner (worked around via `scp` instead, see D-032). Ask the user whether to commit+push this session's changes (git commits are user-initiated per CLAUDE.md — not done automatically). Projected the L-tier hero run (2.1B tokens) at ~13.7hr/~$3.43 on this tier alone — cheaper than the original 5090 "$10-20" estimate; **update `configs/train_s_*.yaml` to `micro_batch=32` before any real run on this tier** (Mac's `micro_batch=16` default isn't gpuhub's optimum). `scripts/cloud/remote.env` is now filled in for this instance so `./scripts/cloud/sync_down.sh` is one command. **Remaining:** repeat only the CUDA-version check on an actual RTX 5090 once gpuhub has inventory (everything else already proven); also flagged (not fixed) — `GPT.forward()` blocks phase 5 Wave B's length-extrapolation probe (hard-rejects seq_len > `max_seq_len`), and `find_batch_size.py`'s `mem_gb` column is unreliable (see D-030). Live playbook: `docs/CLOUD_GPUHUB.md`. | D-017 (superseded for the active path by D-027) | 4 | in-progress (essentially done pending 5090 availability) |
 | RW-5 | `GPT.forward()` hard-rejects any sequence longer than `model_config.max_seq_len` (`ValueError`) — blocked (a) phase 5 Wave B's length-extrapolation probe and (b) the phase-9 capstone's chat-usability goal (real, not just extrapolated, 2k+ context). **Part (a) DONE 2026-07-12 (D-037)**: `forward()`'s guard now only applies to `learned`/`sinusoidal` (physically bounded); rope/alibi/none can run past `max_seq_len` at eval time. Probe ran clean: ALiBi improves with length (ppl 32.56→31.67 @512→2048), RoPE degrades gracefully (33.24→45.68), NoPE collapses (40→732) — real data point for part (b)'s decision, arguing ALiBi deserves consideration alongside RoPE. **Part (b) still open**: `model_l.yaml`'s `max_seq_len` (currently 512, same as S/M) should be deliberately reconsidered for the L-tier capstone per the 2026-07-12 discussion (`docs/learnings/20260712_model-config-strategy.md`) — likely ~2048 native, and now also an open question of RoPE vs ALiBi for that tier given D-037's result | Discovered incidentally while GPU-benchmarking seq_len scaling (D-030); RoPE (already the project default, D-016) is one of the position encodings best suited to this, so the fix is well-aligned with existing choices | 5 (done) / 9 (L-tier capstone max_seq_len + pos_encoding decision, still open) | in-progress |
-| RW-4 | Domain corpus expansion (finance/self-help/wisdom). **Corpus + ablation DONE 2026-07-16 (D-045)**: 62 PD books curated from local Gutenberg catalog data (finance/investing/economics/business + self-help/personal-development/wisdom-practical categories), `domain`-tagged routing added to `acquire.build_books`/`scripts/tokenize_corpus.py`, `MixedSourceLoader`'s existing per-source weights used unmodified. Domain-mix ablation (0/10/25/50% share) found a strictly monotonic general-val-loss cost — recommend **10-25% share** for the capstone (not the original 10-20% target's upper bound, and well short of 50%). **Still open:** finance/wisdom eval probes (phase 6) haven't been built yet; growing the 6.76M-token domain pool before L-tier's much bigger token budget is an open question (recipe.md flags it) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 6 (probes) / 9 (capstone domain-share decision) | in-progress (corpus+ablation done, probes open) |
+| RW-4 | Domain corpus expansion (finance/self-help/wisdom). **Corpus + ablation DONE 2026-07-16 (D-045)**: 62 PD books curated from local Gutenberg catalog data (finance/investing/economics/business + self-help/personal-development/wisdom-practical categories), `domain`-tagged routing added to `acquire.build_books`/`scripts/tokenize_corpus.py`, `MixedSourceLoader`'s existing per-source weights used unmodified. Domain-mix ablation (0/10/25/50% share) found a strictly monotonic general-val-loss cost — recommend **10-25% share** for the capstone (not the original 10-20% target's upper bound, and well short of 50%). **Eval probes DONE 2026-07-17 (D-046)**: `src/llmlab/eval/domain_probes.py` + 24 hand-written items (`data/eval/domain_probes.json`) — this baseline (0% domain share) scores exactly at chance on them, the expected null result. **Still open:** the Wave G "does dictionary-in-the-mix help a define-X eval" ablation is now unblocked but not yet RUN; growing the 6.76M-token domain pool before L-tier's much bigger token budget is an open question (recipe.md flags it) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 9 (capstone domain-share decision) | in-progress (corpus+ablation+probes done, capstone decision open) |
 
 ## Parking lot (future ideas, deliberately not scheduled)
 
@@ -484,10 +535,10 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   for the capstone if training wall-clock (not just token count) is a real constraint. See
   `docs/learnings/20260716_wave-f-deepseek-specials.md` §9.
 - **Wave G dictionary ablation (deferred, phase-5 spec explicitly allows this):** "with vs
-  without dictionary in the mix → does a 'define X' eval improve?" needs phase-6 eval probes
-  that don't exist yet. Pick this up once phase 6 builds its evaluation suite — it's a cheap
-  ablation (single training-data-mix axis, reuses the existing S-tier corpus, no new model
-  code) once the probe to measure it against exists.
+  without dictionary in the mix → does a 'define X' eval improve?" — **unblocked 2026-07-17**:
+  phase 6's dictionary probes (`src/llmlab/eval/dictionary_probes.py`) now exist. Still a cheap,
+  not-yet-run ablation (single training-data-mix axis, reuses the existing S-tier corpus, no new
+  model code, just 2 short train runs + `scripts/evaluate.py` on each).
 | RW-2 | ~~Recompute D-008/D-010 if L-tier grows beyond ~105M~~ — resolved by D-015: L-tier stayed at ~105M (95.6M active), in-range of existing extrapolations, no recompute needed | D-015 finalized tier sizes vocab-aware | 3 | done |
 
 ## Run ledger (latest 10 — full list in experiments/registry.csv)
@@ -503,11 +554,22 @@ from the phase-2 tokenizer study (`20260710_p2_tokenizer-*`) are also in the reg
 
 ## Notes for next session
 
-- **Phase 5 is fully done (2026-07-16).** Next session should read `docs/phases/
-  phase6_evaluation.md` and start phase 6 (evaluation suite). `docs/results/recipe.md` is the
-  input for eventually assembling the phase-9 hero config — read it before phase 9, not before
-  phase 6. RW-4's domain corpus (`data/tokenized/hf_bpe_16k/domain_books*.bin`, 62 books) is
-  ready for phase 6's finance/wisdom probes whenever those get built.
+- **Phase 6 is fully done (2026-07-17), M3 declared.** Next session should read `docs/phases/
+  phase7_data_factory.md` and start phase 7 (DeepSeek-assisted data factory). Remember
+  CLAUDE.md's D-004 rule: never build/run browser automation against DeepSeek's web UI —
+  human-in-the-loop batch workflow only, or the API backend if the user enables it.
+- **The eval suite is built and frozen** (phase 6, D-046): `src/llmlab/eval/` (`scoring.py`'s
+  `score_continuation`/`mc_by_loglik`/`greedy_continuation`/`encode_prompt_continuation` are the
+  shared primitives every probe reuses — reach for these instead of writing new log-likelihood
+  code), `scripts/evaluate.py --ckpt <path>` (writes `eval_results.json` into the run folder,
+  reads model/tokenizer from that run's own `config.yaml`). `tests/test_eval.py` is the
+  reference for probe behavior (uses a tiny GPT with the REAL 16k tokenizer — vocab size must
+  match, unlike `test_model.py`'s fully-toy 256-vocab fixtures). Do NOT add/change probe content
+  without a new D-entry — the battery is frozen so future phase-8/9 checkpoints stay comparable
+  to phase 6/9's own numbers. `TrainConfig.milestone_steps` (new this phase) is available any
+  time a run needs named intermediate snapshots, not just latest/best.
+  `docs/results/recipe.md` is still the input for eventually assembling the phase-9 hero config
+  — read it before phase 9, not before phase 7.
 - **The training engine is built** (this session): `src/llmlab/data/loader.py`
   (`MixedSourceLoader`/`Source`), `src/llmlab/train/{config,trainer}.py` (`TrainConfig`,
   `Trainer`), `scripts/train.py`, `scripts/find_batch_size.py`, plus

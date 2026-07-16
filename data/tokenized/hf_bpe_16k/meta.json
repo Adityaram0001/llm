@@ -173,5 +173,19 @@
       "path": "data/tokenized/hf_bpe_16k/books_only_val.bin",
       "doc_starts_path": "data/tokenized/hf_bpe_16k/books_only_val_docstarts.npy"
     }
+  },
+  "dictionary_only": {
+    "train": {
+      "n_tokens": 3524042,
+      "n_docs": 1,
+      "path": "data/tokenized/hf_bpe_16k/dictionary_only.bin",
+      "doc_starts_path": "data/tokenized/hf_bpe_16k/dictionary_only_docstarts.npy"
+    },
+    "val": {
+      "n_tokens": 99011,
+      "n_docs": 1,
+      "path": "data/tokenized/hf_bpe_16k/dictionary_only_val.bin",
+      "doc_starts_path": "data/tokenized/hf_bpe_16k/dictionary_only_val_docstarts.npy"
+    }
   }
 }

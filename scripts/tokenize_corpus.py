@@ -169,6 +169,13 @@ def main() -> None:
         "books_only.bin / books_only_val.bin -- Wave G's multi-epoch overfitting lab wants a "
         "books-only pool of known size to control epoch count precisely",
     )
+    parser.add_argument(
+        "--dictionary-only",
+        action="store_true",
+        help="additionally tokenize data/clean/{,val/}dictionary_prose.txt WITHOUT the books "
+        "into dictionary_only.bin / dictionary_only_val.bin -- phase 6 needs books and "
+        "dictionary val perplexity reported SEPARATELY (domain ppl differs, see phase6_evaluation.md)",
+    )
     args = parser.parse_args()
 
     tokenizer = Tokenizer.from_file(str(args.tokenizer_dir / "tokenizer.json"))
@@ -224,6 +231,27 @@ def main() -> None:
             }
             print(f"  {len(ids):,} tokens -> {out_path}")
         verify(tokenizer, out_dir / "books_only.bin")
+
+    if args.dictionary_only:
+        meta.setdefault("dictionary_only", {})
+        for split in ["train", "val"]:
+            base = CLEAN_DIR if split == "train" else CLEAN_DIR / "val"
+            files = [base / "dictionary_prose.txt"]
+            print(f"=== dictionary_only {split}: {len(files)} files ===")
+            ids, doc_starts = encode_split(tokenizer, files, eot_id)
+            suffix = "" if split == "train" else "_val"
+            out_path = out_dir / f"dictionary_only{suffix}.bin"
+            docstarts_path = out_dir / f"dictionary_only{suffix}_docstarts.npy"
+            ids.tofile(out_path)
+            np.save(docstarts_path, np.array(doc_starts, dtype=np.int64))
+            meta["dictionary_only"][split] = {
+                "n_tokens": int(len(ids)),
+                "n_docs": len(files),
+                "path": str(out_path.relative_to(ROOT)),
+                "doc_starts_path": str(docstarts_path.relative_to(ROOT)),
+            }
+            print(f"  {len(ids):,} tokens -> {out_path}")
+        verify(tokenizer, out_dir / "dictionary_only.bin")
 
     if args.domain_books:
         meta.setdefault("domain_books", {})

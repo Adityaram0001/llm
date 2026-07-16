@@ -89,6 +89,10 @@ class TrainConfig:
     logging: LoggingConfig
     device: str | None = None  # None -> get_device(); "cpu" for the portability smoke test
     checkpoint_every: int = 500
+    # Phase 6: named snapshots at specific step counts, kept alongside (never overwriting)
+    # latest.pt/best.pt -- e.g. [300, 900, 1500] for an early/mid/final eval_deep_dive trio.
+    # Empty by default since most runs (ablations) only ever need latest/best.
+    milestone_steps: list[int] = field(default_factory=list)
 
     # Wave E (phase 5): efficiency & memory knobs
     precision: str = "bf16"  # bf16 | fp32 -- bf16 uses autocast_ctx, fp32 disables autocast entirely

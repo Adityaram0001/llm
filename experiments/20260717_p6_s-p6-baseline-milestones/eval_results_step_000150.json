@@ -1,0 +1,177 @@
+{
+  "checkpoint": "experiments/20260717_p6_s-p6-baseline-milestones/ckpt/step_000150.pt",
+  "step": 150,
+  "suite": "core",
+  "generated_at": "2026-07-16T21:58:05",
+  "results": {
+    "perplexity": {
+      "books": {
+        "ppl": 260.10238795371754,
+        "bits_per_byte": 2.0891949363595623,
+        "n_tokens": 80384,
+        "n_bytes": 308691
+      },
+      "dictionary": {
+        "ppl": 79.08176902913311,
+        "bits_per_byte": 1.9463567394757053,
+        "n_tokens": 98816,
+        "n_bytes": 320117
+      }
+    },
+    "dictionary_probes": {
+      "n_examples": 200,
+      "definition_completion_ppl": 440.62400306750015,
+      "mc_accuracy": 0.245,
+      "mc_chance": 0.25,
+      "cloze_ppl": 2800.045712845864,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "domain_probes": {
+      "n_examples": 24,
+      "mc_chance": 0.25,
+      "overall_accuracy": 0.5,
+      "finance_term_accuracy": 0.375,
+      "proverb_accuracy": 1.0,
+      "advice_accuracy": 0.125
+    },
+    "generation": {
+      "temperature": 0.8,
+      "top_p": 0.95,
+      "max_new_tokens": 80,
+      "samples": [
+        {
+          "prompt": "Once upon a time",
+          "text": " of the\nfour doctrine, he would determine the true in the\nand an \u201cthrough mathematics_. For those to the course of the\nfeelings of those qualities, which is called such a easy to\nthe particular expressions of the one or the duty, it\nvery. And if is to doubt if I know a idea as I died,\n in the most other real feelings. But if every",
+          "distinct_1": 0.65,
+          "distinct_2": 0.9367088607594937,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "It was a dark and stormy night",
+          "text": ", and when it is a merate\nhis own that are better than they will be sure. If we shall go\nthe other side, and I must be done in several, nor have been been so\na man is a bounty to our worst,--and, if are a great\nreputation of the subject-metaphysions, but in you know the his\nfair fact, and can be",
+          "distinct_1": 0.75,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "In a small village at the edge of the forest",
+          "text": ", a attased of the person who had not put the\nimpphes of a long; as, the Rphan; the wood of the mind; the common\nthat it was been been seven-frose, to the several person who takes the rich\nof what is a little in the loss of a fluid; the aliener of a\ntime, there is then a good",
+          "distinct_1": 0.6,
+          "distinct_2": 0.9240506329113924,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The old man had lived alone for many years",
+          "text": " and only be\nman to the hemly, and who is clear to a town. It is a way\nin the most familiar, he mean, the same, or his own, he is\nhis signs. After we consider you think, but if I should be any\nhis reason, the command the discovery of the first, though the form of\nthe private human which are not",
+          "distinct_1": 0.6625,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "ephemeral (adjective):",
+          "text": " made\nof this only other person to one for which we have been allowed to\nthem to the mind to the most altered. They do it ought to\nagainst the most true, or hard and any duration which was in\nthe continuous repose of no life, and he ought to be true\nwavless rather. The progress of its judgment, on the various\nhis discourse of some he",
+          "distinct_1": 0.7,
+          "distinct_2": 0.9493670886075949,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "prudence (noun):",
+          "text": " in one wife a New-se of the body on a Latin-asy, as one, exraias a social essence to do the\nsame that; the soul, the Dutch-some, which gives all the certain's\ntimes, it is wont to make any part; in the names of\nDeroiminised, and;[ Narl and the incates of a long as it",
+          "distinct_1": 0.6625,
+          "distinct_2": 1.0,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "avarice (noun):",
+          "text": ".\n\n**Cucic** (n.): Aylian.\n\n**Ljunurg**: To Mroace .\n\n**Ena** (n.): The quality of the principal net.\n\n**Cple** (a.): To happen with a gomain.\n\n**Contuments** (n.): The Americanhead of a cardover or by the",
+          "distinct_1": 0.5625,
+          "distinct_2": 0.7468354430379747,
+          "seq_rep_4": 0.09090909090909091
+        },
+        {
+          "prompt": "diligence (noun):",
+          "text": " the false\nthe part of their perplexity. The rest is easily worshipped but to\nupon the cause of being wood. It will do what we do not be\nbe to have, and it cannot be called to thus another, which, or set\n would be upon can be trouble as in a few than the existence\nof the war. And some which is opposed the other place, and to",
+          "distinct_1": 0.7,
+          "distinct_2": 0.9873417721518988,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Of all the virtues a man may possess, none is more essential than",
+          "text": " that he is\nspirignant to make a member. For one I do not be susceptible of the\nsubser, this is what they get by other, not from a other of\nthe consideration of the general form of the species of view,\nand to undertake the most case, according to have a one of the\nmore than to be given, as far as we have these would only",
+          "distinct_1": 0.6375,
+          "distinct_2": 0.9493670886075949,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Philosophy teaches us that true happiness consists in",
+          "text": " the\nmention on itself, and the whole character, they shall be more *enough to the mind\nof some degree. The subject is naturally favno free, and the sun\nof the general force, and here, and yet been made its evidence in\nmisuced ones, as it is always press, a several spirit, and to be\nour actions, but are changed to have much",
+          "distinct_1": 0.6875,
+          "distinct_2": 0.9240506329113924,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "It is the nature of the human mind to seek",
+          "text": " with\nthem, which the object is when the duty of bodies, and is the\nthings, that the mind would be able to be peraction to get in the\ncharacter, or, or unweour, and, '\n\nThat the brain is that were to the universal bodies, it is then\ndistving the order of a treatise. The most presently, if by the\n",
+          "distinct_1": 0.5875,
+          "distinct_2": 0.9367088607594937,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Reason, rightly employed, is the surest guide to",
+          "text": " the Carthaginians, or the\ngreat word he had been brought for their own trust; and that\nis the immediate government, not it to them, it is no ancient\ndestresine and gift that the family, when the permanent degree of it, and\nand possible to produce the democratic treatment, and be no large\ninstead, a opinion, upon the better of a part of the\n",
+          "distinct_1": 0.625,
+          "distinct_2": 0.9746835443037974,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The first rule of saving money is",
+          "text": " a thing, and by the same discourse of this\nit is too greater more than the second of the consciousness of the\ndigterisence of the sudden, the qualities between the woods, the\naccordations in the re company upon the protecting by the power,\nby many man, and the ax-wealth and the course of the nature of\nthe highest same, the first to",
+          "distinct_1": 0.6,
+          "distinct_2": 0.8860759493670886,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "A wise investor always considers",
+          "text": " of others: because they live to Rome, or to see it, for it, I heard, had been quite set to\nwords, unless there is that, they shall have been extinguished and to us.\n\n \u201cIu_ and persuaded me, that we are added, and all, and I's,\n\n\n\n\nAnd I take their good from every friend, _",
+          "distinct_1": 0.6375,
+          "distinct_2": 0.9240506329113924,
+          "seq_rep_4": 0.012987012987012988
+        },
+        {
+          "prompt": "The surest path to financial independence is",
+          "text": " the most\nworld, with that of a other knowledge are not, indeed, he would do\nto be a state.\n\n\n\n\n\n\nthey have been speates.\n\n\nOn the most regarded as anything that is simply more advantageous to get that\nthey have long. For that the former, the time of a double people shall return\nbeing on all which is also",
+          "distinct_1": 0.6125,
+          "distinct_2": 0.8481012658227848,
+          "seq_rep_4": 0.05194805194805195
+        }
+      ],
+      "aggregate": {
+        "distinct_1": 0.3591666666666667,
+        "distinct_2": 0.7839866555462885,
+        "seq_rep_4": 0.011695906432748537
+      }
+    },
+    "benchmarks": {
+      "hellaswag": {
+        "n_examples": 200,
+        "n_skipped_too_long": 0,
+        "accuracy": 0.25,
+        "chance": 0.25
+      },
+      "lambada_style": {
+        "n_examples": 150,
+        "last_word_accuracy": 0.0
+      }
+    }
+  },
+  "timings_s": {
+    "perplexity_books": 1.92,
+    "perplexity_dictionary": 2.27,
+    "dictionary_probes": 11.34,
+    "domain_probes": 0.57,
+    "generation": 8.59,
+    "hellaswag": 10.4,
+    "lambada_style": 2.83
+  },
+  "total_wall_s": 37.91
+}

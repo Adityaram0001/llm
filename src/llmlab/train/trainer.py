@@ -423,6 +423,8 @@ class Trainer:
                 self.step = step + 1  # `step` is now fully done -- safe resume point
                 if self.step % self.cfg.checkpoint_every == 0:
                     self.save_checkpoint(self.run_dir / "ckpt" / "latest.pt")
+                if self.step in self.cfg.milestone_steps:
+                    self.save_checkpoint(self.run_dir / "ckpt" / f"step_{self.step:06d}.pt")
         except KeyboardInterrupt:
             status = "interrupted"
         finally:

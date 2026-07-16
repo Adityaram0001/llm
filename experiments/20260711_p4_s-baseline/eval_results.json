@@ -1,0 +1,177 @@
+{
+  "checkpoint": "experiments/20260711_p4_s-baseline/ckpt/best.pt",
+  "step": 1400,
+  "suite": "core",
+  "generated_at": "2026-07-16T21:54:50",
+  "results": {
+    "perplexity": {
+      "books": {
+        "ppl": 68.45682761629642,
+        "bits_per_byte": 1.5877077648427678,
+        "n_tokens": 80384,
+        "n_bytes": 308691
+      },
+      "dictionary": {
+        "ppl": 18.562432475420582,
+        "bits_per_byte": 1.3009044806942867,
+        "n_tokens": 98816,
+        "n_bytes": 320117
+      }
+    },
+    "dictionary_probes": {
+      "n_examples": 200,
+      "definition_completion_ppl": 101.28164204347509,
+      "mc_accuracy": 0.265,
+      "mc_chance": 0.25,
+      "cloze_ppl": 1465.3790159917944,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "domain_probes": {
+      "n_examples": 24,
+      "mc_chance": 0.25,
+      "overall_accuracy": 0.25,
+      "finance_term_accuracy": 0.125,
+      "proverb_accuracy": 0.5,
+      "advice_accuracy": 0.125
+    },
+    "generation": {
+      "temperature": 0.8,
+      "top_p": 0.95,
+      "max_new_tokens": 80,
+      "samples": [
+        {
+          "prompt": "Once upon a time",
+          "text": " of Fortune\nis mine.\n\nTHEODORUS: And you are now to consider, that those things which are\nin themselves themselves, will be derived from this other qualities.\n\nXIV. It is also in the capacity of a man to write, where he is not to\nadmit of a testimony. No one is to say that the wise man is the\nsubject of",
+          "distinct_1": 0.65,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "It was a dark and stormy night",
+          "text": ", and when it were\nuninvited, it was an enemy's way to my youth. Then, when I was not\ntried to see him in the night, I had long been the most miserable in\nthe streets, and still less known to me.\n\nThe next day of the evening, the night, the night before I died,\nwas a night, and the",
+          "distinct_1": 0.6,
+          "distinct_2": 0.9113924050632911,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "In a small village at the edge of the forest",
+          "text": ", there was a little day,\nnow, it is sometimes said, where the hour of a thousand years, without\nan army, a mine-top, and ever the space of an army in the wars,\nwere the inroads of the war, and all the cities in the cities were\nquite inaccessible. And all this this on this occasion was then\nre",
+          "distinct_1": 0.6,
+          "distinct_2": 0.9493670886075949,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The old man had lived alone for many years",
+          "text": " before. All\nman himself had been so much convicted of a great and renowned man, as\nto have lived in a perpetual battle, he had no other effect than\nthat of the dispute on which he gave him. For he was now, but as a\npupil, of whose light-farms, he was not vexed at it, but making the\nquestion of his",
+          "distinct_1": 0.7125,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "ephemeral (adjective):",
+          "text": "\n\nof this sort is the Enchantment which presides over the Etruscani or the\nPractus in the temple. There is no greater repugnance to the people\nthan a Evill in the Church: for the Church is but a more free\nNeptune. For in the Church also the Church has been destroyed, as\nit is the Church. It",
+          "distinct_1": 0.675,
+          "distinct_2": 0.9113924050632911,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "prudence (noun):",
+          "text": " in one's self, and in a more private degree (118), for\nverity of first good, social, religious, self-denial, or the like, the\nindividual acts by themselves or without self-concepts (the _authority_\nof personal and political injustment).\n\n(2) If a;[1] it is in itself as a self-operation",
+          "distinct_1": 0.7,
+          "distinct_2": 0.9746835443037974,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "avarice (noun):",
+          "text": " I understand of the ancient\nAthenians as true. The other was his design to teach the state of the\nChurch, to whom all men were mentioned as it were a great deal in the\npresence of the people. And since the Romans had not arrived at the\ncommendation of their public government, and with that resolution to\nworship them, they never yet conceived a want of a new right",
+          "distinct_1": 0.7125,
+          "distinct_2": 0.9493670886075949,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "diligence (noun):",
+          "text": " the false voice of a tempest-borne.\n\n**Vistil** (v. t.): To make irony or sound, as of an earth.\n\n**Vistil** (v. t.): To feed or set together; to attract; to trouble.\n\n**Vistilism** (n.): The condition of being emried; their quality and importance",
+          "distinct_1": 0.5875,
+          "distinct_2": 0.7341772151898734,
+          "seq_rep_4": 0.19480519480519481
+        },
+        {
+          "prompt": "Of all the virtues a man may possess, none is more essential than",
+          "text": "\nto others. The ignorance of this universe is not, in the first place,\nnecessary to defend all the virtues, and to overcome the danger of\ntheir own aid; the one, or the other, in the other, is not only unjust\nor desirable. And this, according to my own system, is a proper impression\nin the criterion of the true virtue. Every one ought",
+          "distinct_1": 0.6,
+          "distinct_2": 0.9240506329113924,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Philosophy teaches us that true happiness consists in",
+          "text": " knowing\nthe true happiness of all the parts of life, and that is thus made\nimplication of the moral laws. The distinction is, I answer,\nvulgar, because the good-making of individuals is not only\npleasant, but also happy; or, as I have said, the good man\nis not more justly born.\n\nI look on the subject as a rule",
+          "distinct_1": 0.675,
+          "distinct_2": 0.9873417721518988,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "It is the nature of the human mind to seek",
+          "text": " the life of\nthe eternal, and to make all the bodies of the world the hour of\nall the world, as we may think it impossible to get in the world of\ntruth, or to have any thought or understanding in the world or the\nworld of truth. We may therefore add to the possession of God, the\nexplanation of all things, the true and true religion.",
+          "distinct_1": 0.525,
+          "distinct_2": 0.8987341772151899,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Reason, rightly employed, is the surest guide to",
+          "text": "\nthe happiness of others: for he who does this is not himself, but\nhimself that has reason for the sake of the sake of his own will,\nwould then be that he is not the object of all his fellow-creatures.\n\nBut how do you differ in the knowledge of a man in himself who is\nbad, and from whom I have applied you, I shall speak",
+          "distinct_1": 0.65,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The first rule of saving money is",
+          "text": " a\nsymopical adjustment of money or goods to an inheritance of the\nsame kind. The term of duty is a law of justice, not of good\nqualities, but of the manner in which the law makes a law upon\ndifferent considerations. This is another respect, as also the\nArcadian order. There is a rule, however, which is not applied to\nthe",
+          "distinct_1": 0.625,
+          "distinct_2": 0.9493670886075949,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "A wise investor always considers",
+          "text": " the deficiency in all, and to\nconfederate and support it.\n\nThe effect of this, I set on myself (in my essay) was still only a\ncertainty, and a slight difficulty: first, that my argument was made\nfor me, or I concluded, that my appeal is a little more vivid than\nthe fact. I had written a few words. This was",
+          "distinct_1": 0.7,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The surest path to financial independence is",
+          "text": " the most\nprogressive aim, of which, if we are to consider the external and\nthe moral, would be the best possible possible. How is this more\ndevelopment? The problem is to realize the \"determination of the\n\"ego,\" that is, by the necessity of an \"a purely universal\"\nindividualism. The result is that \"the essential and final\" which\nis",
+          "distinct_1": 0.625,
+          "distinct_2": 1.0,
+          "seq_rep_4": 0.0
+        }
+      ],
+      "aggregate": {
+        "distinct_1": 0.37583333333333335,
+        "distinct_2": 0.8023352793994996,
+        "seq_rep_4": 0.013366750208855471
+      }
+    },
+    "benchmarks": {
+      "hellaswag": {
+        "n_examples": 200,
+        "n_skipped_too_long": 0,
+        "accuracy": 0.215,
+        "chance": 0.25
+      },
+      "lambada_style": {
+        "n_examples": 150,
+        "last_word_accuracy": 0.0
+      }
+    }
+  },
+  "timings_s": {
+    "perplexity_books": 2.08,
+    "perplexity_dictionary": 2.25,
+    "dictionary_probes": 11.07,
+    "domain_probes": 0.66,
+    "generation": 8.87,
+    "hellaswag": 10.53,
+    "lambada_style": 2.99
+  },
+  "total_wall_s": 38.46
+}

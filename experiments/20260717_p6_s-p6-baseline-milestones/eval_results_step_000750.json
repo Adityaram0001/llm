@@ -1,0 +1,177 @@
+{
+  "checkpoint": "experiments/20260717_p6_s-p6-baseline-milestones/ckpt/step_000750.pt",
+  "step": 750,
+  "suite": "core",
+  "generated_at": "2026-07-16T21:58:43",
+  "results": {
+    "perplexity": {
+      "books": {
+        "ppl": 83.24208642302466,
+        "bits_per_byte": 1.661172260606019,
+        "n_tokens": 80384,
+        "n_bytes": 308691
+      },
+      "dictionary": {
+        "ppl": 24.431150855356005,
+        "bits_per_byte": 1.42324832006048,
+        "n_tokens": 98816,
+        "n_bytes": 320117
+      }
+    },
+    "dictionary_probes": {
+      "n_examples": 200,
+      "definition_completion_ppl": 123.34831474916288,
+      "mc_accuracy": 0.275,
+      "mc_chance": 0.25,
+      "cloze_ppl": 1387.7737575742137,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "domain_probes": {
+      "n_examples": 24,
+      "mc_chance": 0.25,
+      "overall_accuracy": 0.25,
+      "finance_term_accuracy": 0.125,
+      "proverb_accuracy": 0.5,
+      "advice_accuracy": 0.125
+    },
+    "generation": {
+      "temperature": 0.8,
+      "top_p": 0.95,
+      "max_new_tokens": 80,
+      "samples": [
+        {
+          "prompt": "Once upon a time",
+          "text": ", we go into the path of the society\nwhich in the Church is an \u201cthrough-nature\u201d which is the most perfect\nman of the will. But if this is such a thing as this is the\nimmortality of God, it is a distinction between the will and the\nGod. But in a state of things which is to be called the God of God,\nand every",
+          "distinct_1": 0.5875,
+          "distinct_2": 0.8860759493670886,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "It was a dark and stormy night",
+          "text": ", and when I were very free from\ngacars to wood in the plains, my Spanish and ancient nations were\ndiswanted. The men brought in the same pip of lightning and the most\nnatural of all the rest; for when the Jews were unable to emrust their\nfails to our will, and the Christian was for the sake of a Guinea\ntreat",
+          "distinct_1": 0.7,
+          "distinct_2": 0.9620253164556962,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "In a small village at the edge of the forest",
+          "text": ", a stray of the Atlantic town, not of the whole of the coast of Pactocbrus, but of the United States.\n\n**Testrew** (n.): A bank in which the great part of the empire is nearly in the condition of the public, or in a second time, a tableb of gold and silver in this country.\n\n**Test",
+          "distinct_1": 0.6125,
+          "distinct_2": 0.8607594936708861,
+          "seq_rep_4": 0.03896103896103896
+        },
+        {
+          "prompt": "The old man had lived alone for many years",
+          "text": " before the\nanswer of the Duke of Blysyd, and of the Comception of the following\nbook.\n\nWhen Zarathustra was spoken of, the Yank was over, and he was\nat a period of age, and he had been induced to meet him to\nfail. But the command was the rising of his eloquence, and he found\nhis conversation in his discourse;",
+          "distinct_1": 0.5875,
+          "distinct_2": 0.9113924050632911,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "ephemeral (adjective):",
+          "text": " made\nthe same of the two subdivisions for which we have been allowed to\nsay, \"It is the most important man.\" The latter, therefore,\nwe know what was meant by means of a description of the infinitum,\nthe next and second is the point of view, and the latter in the\ncontrary. As the antithesis is between the various things. For a\nnon",
+          "distinct_1": 0.675,
+          "distinct_2": 0.9493670886075949,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "prudence (noun):",
+          "text": " Victory is a New Testament.\n\n**Mossift** (n.): The Spanish ship from the southern United States to the Atlantic from the north; the eldoule of the Mediterranean.\n\n**Muthie** (n.): The palace of the Gyman, or of the Caroading of the United;[207] having a royal neck tail.\n\n",
+          "distinct_1": 0.65,
+          "distinct_2": 0.8227848101265823,
+          "seq_rep_4": 0.05194805194805195
+        },
+        {
+          "prompt": "avarice (noun):",
+          "text": " I have of the following small storm\nto be burnt in the shape of a perpetual sepacasis and country of the\nbace? The two things are, the two, four; the one is the net of an\ninstust. The soul passes through the love of a house, the body of\na spring. The soul is a son, and a mother of a wife;",
+          "distinct_1": 0.6125,
+          "distinct_2": 0.9240506329113924,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "diligence (noun):",
+          "text": " the shortest wave of the higher is the\ncomplexly-called god of itself and between the rest and the latter;\nbut the soul is not an alien. The visible element and _plum_ is thus\nnot the nouner of the same thing, which is the _ciival_, but the\nfree being is the cause. The act of the 'minor'",
+          "distinct_1": 0.675,
+          "distinct_2": 0.9240506329113924,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Of all the virtues a man may possess, none is more essential than",
+          "text": " that he\ncan not be in this opinion, because he is the true citizen of all\nothers.\n\nBut this is what you mean by reason, O Brutus, as a king?\n\nI am too; and I have not only said what a man know but what he would\nnot do; but I have said that he is an unawares more natural, but I\n",
+          "distinct_1": 0.65,
+          "distinct_2": 0.9367088607594937,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "Philosophy teaches us that true happiness consists in",
+          "text": " the\ndifferentness of the sentiment, viz. that it is a mere principle of\nsuch a substantial means. In this state of sense, I mean the\nvulgar, or the subject-making, and here the truth is merely the\npossibility of a pure reason.\n\nTo be sure, then, to think that nature is a manifestation of the\nmatter and of its merely concrete",
+          "distinct_1": 0.6,
+          "distinct_2": 0.9367088607594937,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "It is the nature of the human mind to seek",
+          "text": " the\nwhole world which exists in the world, and in the ideal world is the\nuniversal, that all things should be given and merely peraction, but in\nall respects, and in the world, which has been already taken as a\nmaterial and an absolute Idea, the universal and human _quantity_\nitself of the world, and thus only in the former, the process of the",
+          "distinct_1": 0.5625,
+          "distinct_2": 0.8354430379746836,
+          "seq_rep_4": 0.03896103896103896
+        },
+        {
+          "prompt": "Reason, rightly employed, is the surest guide to",
+          "text": " the\nfalseest morality of reason.\n\nIn the case of religious trusts, that ethics is the immediate\nmeans to be established for this present purpose. In short, that\nthat we may well observe, that the true and the false, and that\nin our practical opinion, are so in the case of Plato, as a\nproposition that in this case we should only go to",
+          "distinct_1": 0.625,
+          "distinct_2": 0.9367088607594937,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The first rule of saving money is",
+          "text": " a thing better than to let them be\npre-established; for the third is the second of the second of the\nfamily. And though the former of these, by the second of the second, are\nthe third three cases about which the man has his power in this discussion\nare most plausible and well-known.\n\n\n\n\nCHAPTER XXXV.\n\n\nAnd so",
+          "distinct_1": 0.6375,
+          "distinct_2": 0.8354430379746836,
+          "seq_rep_4": 0.06493506493506493
+        },
+        {
+          "prompt": "A wise investor always considers",
+          "text": " the deficiency in all\nrespects: What is this more evident, if it is well to judge of, that\nthey are the means of all few, and have already gone out, and that the\npain is more easily required than the greater. For, as I have now told,\nthe imitation of those who are not unstable, have, as he had been\nnot, really",
+          "distinct_1": 0.6625,
+          "distinct_2": 0.9746835443037974,
+          "seq_rep_4": 0.0
+        },
+        {
+          "prompt": "The surest path to financial independence is",
+          "text": " the most\nprogressive aim, of which, if we are to choose, we may do better. The\ncapital and moral phases of the one are more or less specious. The\nsacrifice of the individual to the other is likely to be low, and that\nthey have nothing to be filled with the process of changing the other\nthing. It is an entire result of raising the",
+          "distinct_1": 0.6375,
+          "distinct_2": 0.9367088607594937,
+          "seq_rep_4": 0.0
+        }
+      ],
+      "aggregate": {
+        "distinct_1": 0.37916666666666665,
+        "distinct_2": 0.7781484570475397,
+        "seq_rep_4": 0.015873015873015872
+      }
+    },
+    "benchmarks": {
+      "hellaswag": {
+        "n_examples": 200,
+        "n_skipped_too_long": 0,
+        "accuracy": 0.21,
+        "chance": 0.25
+      },
+      "lambada_style": {
+        "n_examples": 150,
+        "last_word_accuracy": 0.0
+      }
+    }
+  },
+  "timings_s": {
+    "perplexity_books": 1.84,
+    "perplexity_dictionary": 2.15,
+    "dictionary_probes": 10.41,
+    "domain_probes": 0.54,
+    "generation": 8.7,
+    "hellaswag": 10.3,
+    "lambada_style": 2.96
+  },
+  "total_wall_s": 36.89
+}
