@@ -6,9 +6,38 @@
 **Active phase:** Phase 4 is **done** (milestone M1 declared). Phase 5
 (`docs/phases/phase5_ablations.md`) is **in-progress**: seed-noise study done (D-035), **Wave A
 done (D-036)**, **Wave B done (D-037)**, **Wave C done (D-038)**, **Wave D done (D-039)**, **Wave
-E done (D-040)**. **Waves A-D done = the M2 milestone is DECLARED** (Wave E isn't part of M2's
-exit criteria but is now done too). Wave F (DeepSeek specials: MoE aux-loss vs aux-loss-free,
-MTP) is next — the flagship-3 wave, needs new model code (routing, MTP head).
+E done (D-040)**, **Wave F done (D-044)**. **Waves A-D done = the M2 milestone is DECLARED**
+(Waves E/F aren't part of M2's exit criteria but are now done too). Wave G (data & scaling —
+multi-epoch overfitting lab, dictionary ablation, RW-4 domain-mix ablation, mini scaling law) is
+next and is the LAST wave of phase 5 — once it lands, write `docs/results/recipe.md` (deferred
+since Wave C) and phase 5 can be marked fully done.
+
+**This session (2026-07-16, Wave F — DeepSeek specials, MoE + MTP):** implemented
+`src/llmlab/model/moe.py` (`MoEFFN` — 8 fine-grained routed experts + 1 shared, top-2, expert
+hidden sized so active params/token match the dense baseline) and `src/llmlab/model/mtp.py`
+(`MTPHead` — sequential Multi-Token-Prediction depths sharing the main output head), wired
+through `Block`/`GPT`/`Trainer` with no remaining `NotImplementedError` guards on `moe`/`mtp`
+config fields. +34 tests (127 local cpu/mps, 98 remote-cuda, all pass). Ran 3 S-tier runs on the
+RTX 5090 (singapore-b:25864, live and idle at session start). **Results (D-044):
+DeepSeekMoE reproduces its headline win** — both balancing methods beat the dense control by
+~0.09 val_loss (>4x noise floor) at matched active params (18.61M total vs control's 9.71M, both
+~4.43M active) — more total capacity via fine-grained experts genuinely helps. **aux_loss vs
+bias_free balancing are statistically tied on final quality** (0.008 apart) but **bias_free
+balances measurably slower** (aux_loss's gradient signal reaches good balance by step ~200;
+bias_free's bounded per-step bias nudge takes until step ~800-1000) — a clean reproduction of
+DeepSeek-V3's own mechanistic tradeoff. **MTP (+1 head predicting t+2) is not distinguishable
+from noise** (+0.017, at the noise floor's edge) at this scale/token budget, though the extra
+head does demonstrably learn its own harder task. **Caught and fixed a real bug before writing
+any verdict**: `Trainer.evaluate()` was reading `forward()`'s COMBINED training loss (main CE +
+weighted aux terms) instead of pure CE, which silently added ~+0.15 to the aux_loss run's
+val_loss (moe_aux_loss sums across all 15 layers) while bias_free's was unaffected (zero aux
+loss by design) — producing a fake ~0.15 "gap" that looked like a real finding. Caught by
+checking the delta against the D-035 noise floor before concluding anything; fixed
+(`last_aux_metrics["ce_loss"]` now separates pure CE from the training objective), covered by a
+new regression test, both affected runs re-executed clean (the two buggy, notes-less, same-
+session run folders were deleted rather than kept as confusing duplicates). Figure:
+`docs/results/wave_f_deepseek_specials.png`. **GPU LEFT RUNNING (singapore-b:25864) — user must
+stop it to stop billing** once satisfied everything synced down correctly.
 
 **Later same day (2026-07-16, wandb turned on + a real cloud-throughput gap fixed):** user
 created a wandb account and gave credentials — stored in `.env`/`.env.example` (D-042), new
@@ -364,13 +393,25 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   batch — always prefer the largest micro-batch that fits); **weight tying off** shows a real
   quality win (-0.0278) but isn't param-matched (+31.6% params), so doesn't settle the question
   cleanly (flagged follow-up). Figure: `docs/results/wave_e_efficiency_memory.png`.
-- [ ] Wave F — DeepSeek specials (MoE w/ aux-loss vs aux-loss-free, MTP) — needs RW-5 fixed for
-  full context-length work but MoE/MTP themselves don't require it
+- [x] Wave F — DeepSeek specials (D-044): new `src/llmlab/model/moe.py` (`MoEFFN`, 8 routed + 1
+  shared experts, top-2, active-param-matched) + `src/llmlab/model/mtp.py` (`MTPHead`, sequential
+  depths, shared output head), fully wired through `Block`/`GPT`/`Trainer` (no more
+  `NotImplementedError` guards). **DeepSeekMoE reproduces its headline win** — both balancing
+  methods beat the dense control by ~0.09 val_loss (>4x noise floor) at matched active params
+  (18.61M total vs 9.71M control, ~4.43M active either way). **aux_loss vs bias_free balancing
+  tied on final quality** (0.008 apart) but **bias_free balances measurably slower** (aux_loss's
+  gradient signal reaches good balance by step ~200, bias_free's bounded per-step nudge takes
+  until step ~800-1000) — a clean reproduction of DeepSeek-V3's own tradeoff. **MTP (+1 head
+  predicting t+2) not distinguishable from noise** (+0.017) at this scale/budget, though the
+  extra head demonstrably learns its own harder task. Real val_loss-measurement bug caught and
+  fixed before any verdict was written (moe_aux_loss was silently leaking into the eval metric —
+  see D-044); covered by a new regression test. 3 runs registered, +34 tests (127 local, 98
+  remote-cuda). Figure: `docs/results/wave_f_deepseek_specials.png`.
 - [ ] Wave G — Data & scaling (multi-epoch overfitting lab, dictionary ablation, RW-4 domain-mix
-  ablation, mini scaling law `notebooks/07_scaling_law.ipynb`)
+  ablation, mini scaling law `notebooks/07_scaling_law.ipynb`) — the LAST wave of phase 5
 - [x] Exit criteria (M2): waves A-D done + verdicts, figures in `docs/results/`, all runs
   registered. **M2 DECLARED 2026-07-13.** `docs/results/recipe.md` (phase 9 input) still not
-  written — deferred until Waves E-G land too, same reasoning as Wave C's session note.
+  written — deferred until Wave G lands too, same reasoning as Wave C's session note.
 
 ## Rework queue (see CLAUDE.md "Change management")
 
@@ -392,6 +433,14 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   breaks ppl comparability with all v1 runs; 32k only pays once the corpus is big/diverse
   enough (phase 2 measured 49.3% vocab utilization at 32k on the v1 corpus). See
   `docs/learnings/20260711_gpu-vocab-datamix.md` §3.
+- **Wave F MoE equal-wall-clock rerun**: Wave F's -0.09 val_loss win for DeepSeekMoE (D-044) is
+  at fixed TOKEN budget; MoE also measured ~2.18x slower tok/s than the dense control (median
+  223.6K vs 487.9K tok/s, routing's many-small-matmuls overhead — found in the 2026-07-16
+  discussion session, not in the original D-044 write-up). Whether MoE still wins at fixed
+  WALL-CLOCK is untested — would need the dense control trained ~2.18x longer (or MoE trained
+  ~2.18x fewer steps) at the same GPU-time budget. Worth resolving before phase 9 commits to MoE
+  for the capstone if training wall-clock (not just token count) is a real constraint. See
+  `docs/learnings/20260716_wave-f-deepseek-specials.md` §9.
 | RW-2 | ~~Recompute D-008/D-010 if L-tier grows beyond ~105M~~ — resolved by D-015: L-tier stayed at ~105M (95.6M active), in-range of existing extrapolations, no recompute needed | D-015 finalized tier sizes vocab-aware | 3 | done |
 
 ## Run ledger (latest 10 — full list in experiments/registry.csv)

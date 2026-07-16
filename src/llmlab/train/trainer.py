@@ -273,7 +273,7 @@ class Trainer:
             return autocast_ctx(self.device)
         raise ValueError(f"unknown precision {self.cfg.precision!r}")
 
-    def train_step(self) -> tuple[float, float, float]:
+    def train_step(self) -> tuple[float, float, float, dict]:
         self.model.train()
         lrs = [lr_at_step(self.step, self.cfg, base_lr=b) for b in self._base_lrs]
         for opt, lr in zip(self.optimizers, lrs):
@@ -283,6 +283,7 @@ class Trainer:
 
         z_loss_weight = self.cfg.optim.z_loss_weight
         total_loss = 0.0
+        aux_metrics: dict = {}
         for micro in range(self.cfg.batch.grad_accum):
             data_step = self.step * self.cfg.batch.grad_accum + micro
             x, y = self.train_loader.get_batch(data_step, self.cfg.batch.micro_batch, self.device)
@@ -294,6 +295,10 @@ class Trainer:
                     # matter to cross-entropy -- a stability aid, not an accuracy one.
                     z_loss = logits.logsumexp(dim=-1).pow(2).mean()
                     loss = loss + z_loss_weight * z_loss
+            # Wave F: grabbed from the LAST micro-batch only (diagnostic logging, not part of
+            # the optimized objective -- that already correctly sums moe/mtp loss terms into
+            # `loss` above, per micro-batch, via loss.backward()).
+            aux_metrics = self._raw_model.last_aux_metrics
             loss = loss / self.cfg.batch.grad_accum
             loss.backward()
             total_loss += loss.item()
@@ -301,18 +306,34 @@ class Trainer:
         grad_norm = torch.nn.utils.clip_grad_norm_(
             self.model.parameters(), self.cfg.optim.grad_clip
         )
+        # Wave F: DeepSeek-V3's aux-loss-free bias update is gradient-free bookkeeping, not part
+        # of backward/optimizer.step() -- fires once per optimizer step, aggregating load across
+        # every micro-batch this step just ran (see MoEFFN.update_bias).
+        moe_cfg = self._raw_model.cfg.moe
+        if moe_cfg is not None:
+            self._raw_model.update_moe_bias(moe_cfg.bias_update_rate)
         for opt in self.optimizers:
             opt.step()
         self.tokens_seen += self.tokens_per_step
-        return total_loss, float(grad_norm), lrs[0]
+        return total_loss, float(grad_norm), lrs[0], aux_metrics
 
     @torch.no_grad()
     def evaluate(self) -> float:
         """Deliberately NOT gated by `precision` -- eval always ran in plain fp32 (no autocast)
         even before Wave E's precision knob existed, so every wave's val_loss stays measured
-        the same way regardless of what precision a given run trained under."""
+        the same way regardless of what precision a given run trained under.
+
+        Wave F (phase 5): reads `last_aux_metrics["ce_loss"]` -- pure next-token cross-entropy,
+        NOT `forward()`'s returned `loss` (which for moe/mtp configs also carries the weighted
+        aux/balance terms that `train_step` needs for backprop). val_loss must stay directly
+        comparable to every other wave's noise-floor convention (docs/EXPERIMENTS.md), which
+        only ever measured plain CE.
+        """
         self.model.eval()
-        losses = [self.model(x, y)[1].item() for x, y in self._eval_batches]
+        losses = []
+        for x, y in self._eval_batches:
+            self.model(x, y)
+            losses.append(self._raw_model.last_aux_metrics["ce_loss"])
         self.model.train()
         return sum(losses) / len(losses)
 
@@ -329,7 +350,16 @@ class Trainer:
         out_path = self.run_dir / "samples" / f"step_{self.step:06d}.txt"
         out_path.write_text("\n".join(lines), encoding="utf-8")
 
-    def _log(self, step: int, train_loss: float, grad_norm: float, lr: float, tokens_per_sec: float, val_loss: float | None) -> None:
+    def _log(
+        self,
+        step: int,
+        train_loss: float,
+        grad_norm: float,
+        lr: float,
+        tokens_per_sec: float,
+        val_loss: float | None,
+        aux_metrics: dict | None = None,
+    ) -> None:
         record = {
             "step": step,
             "tokens_seen": self.tokens_seen,
@@ -342,6 +372,8 @@ class Trainer:
         }
         if val_loss is not None:
             record["val_loss"] = val_loss
+        if aux_metrics:  # Wave F: moe_aux_loss / expert_load (per-layer) / mtp_loss, if present
+            record.update(aux_metrics)
         with self.metrics_path.open("a") as f:
             f.write(json.dumps(record) + "\n")
         wandb.log(record, step=step)
@@ -370,7 +402,7 @@ class Trainer:
             for step in pbar:
                 self.step = step  # train_step()/lr_at_step read this for the step about to run
                 t0 = time.time()
-                train_loss, grad_norm, lr = self.train_step()
+                train_loss, grad_norm, lr, aux_metrics = self.train_step()
                 step_time = time.time() - t0
                 tokens_per_sec = self.tokens_per_step / step_time
 
@@ -382,7 +414,7 @@ class Trainer:
                         self.save_checkpoint(self.run_dir / "ckpt" / "best.pt")
 
                 if step % self.cfg.logging.log_every == 0 or val_loss is not None:
-                    self._log(step, train_loss, grad_norm, lr, tokens_per_sec, val_loss)
+                    self._log(step, train_loss, grad_norm, lr, tokens_per_sec, val_loss, aux_metrics)
                     pbar.set_postfix(loss=f"{train_loss:.3f}", val=f"{val_loss:.3f}" if val_loss else "-", lr=f"{lr:.2e}")
 
                 if step % self.cfg.sampling.sample_every == 0:

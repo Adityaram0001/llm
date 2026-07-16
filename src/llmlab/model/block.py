@@ -15,6 +15,7 @@ import torch.nn as nn
 from .attention import make_attention
 from .config import ModelConfig
 from .ffn import make_ffn
+from .moe import MoEFFN
 from .norms import make_norm
 
 
@@ -25,7 +26,9 @@ class Block(nn.Module):
         self.attn_norm = make_norm(cfg.norm, cfg.d_model)
         self.attn = make_attention(cfg)
         self.ffn_norm = make_norm(cfg.norm, cfg.d_model)
-        self.ffn = make_ffn(cfg.ffn, cfg.d_model, cfg.ffn_mult, cfg.dropout)
+        self.ffn = (
+            MoEFFN(cfg) if cfg.moe is not None else make_ffn(cfg.ffn, cfg.d_model, cfg.ffn_mult, cfg.dropout)
+        )
 
     def forward(
         self,

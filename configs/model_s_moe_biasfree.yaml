@@ -1,0 +1,43 @@
+# Wave F (phase 5) -- DeepSeekMoE, DeepSeek-V3's aux-loss-FREE (bias-based) balancing. Identical
+# trunk/expert-sizing to model_s_moe_auxloss.yaml -- balancing method is the only variable
+# between the two, so this pair is the wave's aux-loss-vs-aux-loss-free comparison.
+#
+# Active-param match (DeepSeekMoE's headline claim): each expert's hidden dim is the dense
+# baseline's ffn hidden (512) divided by (n_shared+top_k)=3 -> 171, so a token's ACTIVE ffn
+# compute (1 shared + 2 routed = 3 expert-equivalents) is ~equal to the dense FFN's, while total
+# capacity is much larger (9 experts total vs 1 dense FFN).
+#
+# Param breakdown (measured): embed 3.07M, attn 2.21M, ffn 13.32M (total, ~4.43M active),
+# norms 0.01M -> total 18.61M (vs model_s.yaml's 9.71M dense control) -- see Wave F notes for the
+# active-vs-total distinction this is meant to demonstrate.
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 3
+n_kv_heads: 3
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2
+
+moe:
+  n_experts: 8
+  n_shared: 1
+  top_k: 2
+  balancing: bias_free
+  bias_update_rate: 0.001

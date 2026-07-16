@@ -141,3 +141,44 @@ not val_loss.
   size, not by default (~27% slower when memory isn't the constraint). Weight tying's quality
   question needs a param-matched rerun before it can override D-016's existing budget-driven
   default.
+
+## Wave F — DeepSeek specials: MoE + MTP (2026-07-16)
+
+Control: `20260713_p5_s-wave-d-control` (reused). Noise floor: 0.015-0.02 (D-035). Figure:
+`docs/results/wave_f_deepseek_specials.png`. New code this wave: `src/llmlab/model/moe.py`
+(`MoEFFN` — fine-grained routing, active-param-matched expert sizing, `aux_loss`/`bias_free`
+balancing), `src/llmlab/model/mtp.py` (`MTPHead` — sequential depth chaining, shared
+final_norm+lm_head), wired through `Block`/`GPT`/`Trainer` (bias-update hook after each
+optimizer step, `last_aux_metrics` for logging). +34 tests (127 local, 98 remote-cuda, all pass).
+- **DeepSeekMoE (8 routed + 1 shared experts, top-2, active-param-matched to the dense FFN —
+  18.61M total vs control's 9.71M, ~4.43M active either way): REAL, substantial win.** aux_loss
+  balancing -0.0907, bias_free balancing -0.0828 vs control — both >4x the noise floor. Confirms
+  the paper's headline: more total capacity via many small experts improves quality at matched
+  active compute/token, at 10M-param scale.
+- **aux_loss vs bias_free balancing: statistically tied on final quality** (0.0079 apart, within
+  noise) but **measurably different balancing DYNAMICS** — aux_loss's gradient-driven signal
+  reaches good balance (per-expert load std/mean < 0.03) by step ~200; bias_free's fixed-size
+  per-step bias nudge doesn't catch up until step ~800-1000 (briefly the more imbalanced of the
+  two mid-training). Exactly the mechanistic tradeoff DeepSeek-V3 describes: no gradient
+  interference with the main loss, at the cost of a slower, bounded correction loop. Both settle
+  to comparably tight balance (~0.01 std/mean) and equal quality by the end.
+- **Multi-Token Prediction (+1 head predicting t+2, loss_weight=0.3, +0.52M params/+5.3%, train-
+  time only): NOT distinguishable from noise** (+0.0167 vs control, right at the noise floor's
+  edge). The extra head demonstrably learns its own (harder) task (loss 9.71→3.78) but doesn't
+  measurably move the main next-token objective at this scale/token budget — consistent with a
+  technique whose payoff needs more scale/tokens to surface, not a clean negative result.
+- **Real bug caught and fixed mid-wave (D-044):** the first attempt at both MoE runs computed
+  `val_loss` from `forward()`'s COMBINED training objective (main CE + weighted aux/balance
+  terms) instead of pure CE — `moe_aux_loss` sums across all 15 layers (~15 at good balance) so
+  `aux_loss_weight=0.01` silently added ~+0.15 to the aux_loss run's reported metric while
+  bias_free's (correctly zero by design) stayed unaffected, producing a fake ~0.15 "gap" between
+  the two balancing methods that looked like a real finding. Caught before any verdict was
+  written by checking the raw numbers against the noise floor; fixed (`GPT.forward` now separates
+  `last_aux_metrics["ce_loss"]` from the combined training loss; `Trainer.evaluate()` reads the
+  former), covered by a regression test, both MoE runs re-executed clean.
+- **Verdict for phase 9's recipe:** DeepSeekMoE is a strong candidate for the capstone if total
+  parameter budget allows — real quality win at equal active compute, and the balancing-method
+  choice doesn't matter for final quality (pick bias_free if avoiding aux-loss gradient
+  interference matters more than balancing speed, aux_loss otherwise). MTP is not yet justified
+  at S-tier/this token budget; worth revisiting at M/L-tier or with a `loss_weight`/
+  `n_predict_tokens` sweep before including it in the capstone recipe.

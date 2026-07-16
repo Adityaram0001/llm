@@ -1,0 +1,35 @@
+# Wave F (phase 5) -- Multi-Token Prediction (DeepSeek-V3 S2.2). Same trunk as model_s.yaml
+# (dense FFN, unchanged) plus one extra sequential MTP head predicting t+2 -- the head is a full
+# extra transformer Block, so it's a train-time-only compute cost (dropped for generate()/eval
+# perplexity, exactly as DeepSeek-V3 drops MTP modules at inference).
+#
+# Param breakdown (measured): base 9.71M (identical to model_s.yaml) + mtp 0.52M (one Block +
+# the combine projection) -> total 10.23M (+5.3%).
+
+vocab_size: 16000
+d_model: 192
+n_layers: 15
+n_heads: 3
+n_kv_heads: 3
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2
+
+mtp:
+  n_predict_tokens: 1
+  loss_weight: 0.3

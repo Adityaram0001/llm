@@ -1,9 +1,8 @@
 """GPT: embeddings -> transformer blocks -> final norm -> LM head.
 
 Every technique this lab studies (norm type/position, positional encoding, attention variant,
-FFN type, weight tying, init scheme) is a `ModelConfig` field threaded through here — there is
-exactly one model class, not one per technique. `moe`/`mtp` fields exist so old configs stay
-loadable but raise `NotImplementedError` until phase 5.
+FFN type, weight tying, init scheme, MoE routing, MTP heads) is a `ModelConfig` field threaded
+through here — there is exactly one model class, not one per technique.
 """
 
 from __future__ import annotations
@@ -18,6 +17,8 @@ import torch.utils.checkpoint
 from .block import Block
 from .config import ModelConfig
 from .ffn import GELUMLP, SwiGLUMLP
+from .moe import MoEFFN
+from .mtp import MTPHead
 from .norms import make_norm
 from .positional import (
     LearnedPositionalEmbedding,
@@ -29,15 +30,15 @@ from .positional import (
 class GPT(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
-        if cfg.moe is not None:
+        if cfg.mtp is not None and cfg.pos_encoding in ("learned", "sinusoidal"):
+            # MTP heads run on a combined [prev hidden; next-token embedding] tensor that never
+            # passes through the input embedding stage, which is the only place learned/
+            # sinusoidal positions get added — rope/alibi/none all inject position inside
+            # Attention itself (per-block), so they work unmodified on the shorter MTP
+            # subsequences (see `_mtp_loss`).
             raise NotImplementedError(
-                "MoE (Mixture-of-Experts) is a phase 5-F technique — the config field exists "
-                "so configs stay loadable, but routing isn't implemented yet."
-            )
-        if cfg.mtp is not None:
-            raise NotImplementedError(
-                "MTP (Multi-Token Prediction) is a phase 5-F technique — the config field "
-                "exists so configs stay loadable, but it isn't implemented yet."
+                "MTP requires pos_encoding in {rope, alibi, none} — learned/sinusoidal positions "
+                "are added at the input embedding stage, which MTP heads never see."
             )
         self.cfg = cfg
 
@@ -57,6 +58,12 @@ class GPT(nn.Module):
         if cfg.tie_embeddings:
             self.lm_head.weight = self.tok_emb.weight
 
+        self.mtp_heads = (
+            nn.ModuleList([MTPHead(cfg) for _ in range(cfg.mtp.n_predict_tokens)])
+            if cfg.mtp is not None
+            else None
+        )
+
         self.apply(self._init_weights)
         self._scale_residual_projections()
 
@@ -66,6 +73,10 @@ class GPT(nn.Module):
         # only whether each block's activations are recomputed on the backward pass instead of
         # kept in memory (Chen et al. '16). Only applies during training with no KV cache.
         self.gradient_checkpointing = False
+
+        # Wave F (phase 5): populated by forward() whenever targets is given -- moe_aux_loss,
+        # expert_load, mtp_loss, read by Trainer for metrics.jsonl/wandb logging.
+        self.last_aux_metrics: dict = {}
 
     # -- init --------------------------------------------------------------
 
@@ -97,13 +108,13 @@ class GPT(nn.Module):
         """
         scale = 1.0 / math.sqrt(2 * self.cfg.n_layers)
         if self.cfg.init == "gpt2":
-            residual_writing = [
-                *[b.attn.o_proj for b in self.blocks],
-                *[
-                    b.ffn.fc_out if isinstance(b.ffn, GELUMLP) else b.ffn.down_proj
-                    for b in self.blocks
-                ],
-            ]
+            residual_writing = [b.attn.o_proj for b in self.blocks]
+            for b in self.blocks:
+                residual_writing.extend(self._ffn_residual_projections(b.ffn))
+            if self.mtp_heads is not None:
+                for head in self.mtp_heads:
+                    residual_writing.append(head.block.attn.o_proj)
+                    residual_writing.extend(self._ffn_residual_projections(head.block.ffn))
             for module in residual_writing:
                 with torch.no_grad():
                     module.weight.mul_(scale)
@@ -114,6 +125,17 @@ class GPT(nn.Module):
                         module.weight.mul_(scale)
         else:
             raise ValueError(f"Unknown init scheme: {self.cfg.init}")
+
+    @staticmethod
+    def _ffn_residual_projections(ffn: nn.Module) -> list[nn.Linear]:
+        """The linear layer(s) of an FFN sub-layer that write directly into the residual
+        stream -- one per dense FFN, or one per expert (routed + shared) for `MoEFFN`, since
+        every active expert writes into the same residual stream on the tokens it's assigned."""
+        if isinstance(ffn, GELUMLP):
+            return [ffn.fc_out]
+        if isinstance(ffn, MoEFFN):
+            return [e.down_proj for e in ffn.experts] + [e.down_proj for e in ffn.shared_experts]
+        return [ffn.down_proj]  # SwiGLUMLP
 
     # -- forward -------------------------------------------------------------
 
@@ -158,15 +180,76 @@ class GPT(nn.Module):
                 x = torch.utils.checkpoint.checkpoint(block, x, attn_bias, cache, use_reentrant=False)
             else:
                 x = block(x, attn_bias, cache)
+        trunk_h = x  # pre-final-norm hidden -- MTP heads branch off this, not off `logits`
         x = self.final_norm(x)
         logits = self.lm_head(x)
 
         loss = None
+        self.last_aux_metrics = {}
         if targets is not None:
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1
             )
+            # Pure next-token CE, before any aux term is mixed in -- Trainer.evaluate() reads
+            # THIS for val_loss so Wave F stays comparable to every other wave's noise-floor
+            # convention (docs/EXPERIMENTS.md). `loss` below keeps accumulating aux terms since
+            # that combined value is what train_step() actually backprops through.
+            self.last_aux_metrics["ce_loss"] = float(loss.detach())
+
+            if self.cfg.moe is not None:
+                moe_aux_loss = sum(block.ffn.last_aux_loss for block in self.blocks)
+                loss = loss + self.cfg.moe.aux_loss_weight * moe_aux_loss
+                self.last_aux_metrics["moe_aux_loss"] = float(moe_aux_loss.detach())
+                self.last_aux_metrics["expert_load"] = [
+                    block.ffn.last_expert_load.tolist() for block in self.blocks
+                ]
+
+            if self.mtp_heads is not None:
+                mtp_loss = self._mtp_loss(trunk_h, targets)
+                if mtp_loss is not None:
+                    loss = loss + self.cfg.mtp.loss_weight * mtp_loss
+                    self.last_aux_metrics["mtp_loss"] = float(mtp_loss.detach())
+
         return logits, loss
+
+    def _mtp_loss(self, trunk_h: torch.Tensor, targets: torch.Tensor) -> torch.Tensor | None:
+        """Chains the MTP heads sequentially -- depth d combines depth (d-1)'s hidden state
+        (dropping its last position) with the embedding of the token d steps ahead (teacher-
+        forced from `targets`, itself already the next-token-shifted sequence: `targets[:,j]`
+        IS the token at absolute position j+1), then predicts the token d+1 steps ahead.
+
+        Sequence-length bookkeeping: depth d's inputs/targets both have length T-d (T = trunk_h's
+        length); every depth's retained positions are the ORIGINAL sequence's first T-d
+        positions (we always trim from the right), so RoPE/ALiBi need no offset — the subsequence
+        is exactly the causal prefix the position encoding already expects.
+        """
+        h = trunk_h
+        y = targets
+        T = y.shape[1]
+        losses = []
+        for depth, head in enumerate(self.mtp_heads, start=1):
+            if h.shape[1] <= 1:
+                break
+            h_prev = h[:, :-1, :]
+            next_emb = self.tok_emb(y[:, depth - 1 : T - 1])
+            bias = None
+            if self.cfg.pos_encoding == "alibi":
+                bias = build_alibi_bias(self.cfg.n_heads, h_prev.shape[1], h_prev.device)
+            h = head(h_prev, next_emb, bias)
+            target_d = y[:, depth:]
+            depth_logits = self.lm_head(self.final_norm(h))
+            losses.append(
+                F.cross_entropy(depth_logits.reshape(-1, depth_logits.size(-1)), target_d.reshape(-1))
+            )
+        return torch.stack(losses).mean() if losses else None
+
+    def update_moe_bias(self, update_rate: float) -> None:
+        """Called by `Trainer` once per optimizer step (after all grad-accum micro-batches) --
+        no-op unless `moe.balancing == "bias_free"`; see `MoEFFN.update_bias`."""
+        if self.cfg.moe is None:
+            return
+        for block in self.blocks:
+            block.ffn.update_bias(update_rate)
 
     # -- generation ------------------------------------------------------------
 
@@ -231,7 +314,15 @@ class GPT(nn.Module):
         if not breakdown:
             return sum(p.numel() for p in self.parameters())
 
-        counts = {"embed": self.tok_emb.weight.numel(), "pos_embed": 0, "attn": 0, "ffn": 0, "norms": 0, "head": 0}
+        counts = {
+            "embed": self.tok_emb.weight.numel(),
+            "pos_embed": 0,
+            "attn": 0,
+            "ffn": 0,
+            "norms": 0,
+            "head": 0,
+            "mtp": 0,
+        }
         if self.pos_emb is not None:
             counts["pos_embed"] = sum(p.numel() for p in self.pos_emb.parameters())
         for block in self.blocks:
@@ -242,6 +333,8 @@ class GPT(nn.Module):
         counts["norms"] += sum(p.numel() for p in self.final_norm.parameters())
         if not self.cfg.tie_embeddings:
             counts["head"] = self.lm_head.weight.numel()
+        if self.mtp_heads is not None:
+            counts["mtp"] = sum(p.numel() for head in self.mtp_heads for p in head.parameters())
         counts["total"] = sum(v for k, v in counts.items() if k != "total")
         return counts
 

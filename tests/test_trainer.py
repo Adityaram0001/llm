@@ -7,6 +7,7 @@ same per-step losses an uninterrupted run would have produced.
 
 from __future__ import annotations
 
+import json
 import math
 from types import SimpleNamespace
 
@@ -92,7 +93,13 @@ def test_build_param_groups_excludes_norms_and_embeddings():
     assert len(decay_ids) + len(no_decay_ids) == sum(1 for _ in model.parameters())
 
 
-def make_tiny_trainer(tmp_path, run_name: str, seed: int = 0, optim_overrides: dict | None = None) -> Trainer:
+def make_tiny_trainer(
+    tmp_path,
+    run_name: str,
+    seed: int = 0,
+    optim_overrides: dict | None = None,
+    model_overrides: dict | None = None,
+) -> Trainer:
     model_cfg_path = tmp_path / "model_tiny.yaml"
     model_cfg_path.write_text(
         yaml.dump(
@@ -104,6 +111,7 @@ def make_tiny_trainer(tmp_path, run_name: str, seed: int = 0, optim_overrides: d
                 "n_kv_heads": 2,
                 "head_dim": 16,
                 "max_seq_len": 32,
+                **(model_overrides or {}),
             }
         )
     )
@@ -135,7 +143,7 @@ def make_tiny_trainer(tmp_path, run_name: str, seed: int = 0, optim_overrides: d
 def run_n_steps(trainer: Trainer, n: int) -> list[float]:
     losses = []
     for _ in range(n):
-        loss, _grad_norm, _lr = trainer.train_step()
+        loss, _grad_norm, _lr, _aux = trainer.train_step()
         losses.append(loss)
         trainer.step += 1
     return losses
@@ -201,8 +209,8 @@ def test_gradient_checkpointing_flag_reaches_the_model(tmp_path):
     assert t_on.model.gradient_checkpointing is True
     t_on.model.load_state_dict(copy.deepcopy(t_off.model.state_dict()))
 
-    loss_off, grad_norm_off, _ = t_off.train_step()
-    loss_on, grad_norm_on, _ = t_on.train_step()
+    loss_off, grad_norm_off, _, _ = t_off.train_step()
+    loss_on, grad_norm_on, _, _ = t_on.train_step()
     assert loss_off == pytest.approx(loss_on)
     assert grad_norm_off == pytest.approx(grad_norm_on, rel=1e-4)
 
@@ -216,7 +224,7 @@ def test_precision_fp32_disables_autocast(tmp_path):
     trainer = make_tiny_trainer(tmp_path, "fp32run")
     trainer.cfg.precision = "fp32"
     assert isinstance(trainer._autocast(), nullcontext)
-    loss, grad_norm, _ = trainer.train_step()
+    loss, grad_norm, _, _ = trainer.train_step()
     assert math.isfinite(loss)
     assert math.isfinite(grad_norm)
 
@@ -246,6 +254,83 @@ def test_z_loss_changes_optimization_when_enabled(tmp_path):
     t_on = make_tiny_trainer(tmp_path / "on", "on", optim_overrides={"z_loss_weight": 1.0})
     t_on.model.load_state_dict(copy.deepcopy(t_off.model.state_dict()))
 
-    _, grad_norm_off, _ = t_off.train_step()
-    _, grad_norm_on, _ = t_on.train_step()
+    _, grad_norm_off, _, _ = t_off.train_step()
+    _, grad_norm_on, _, _ = t_on.train_step()
     assert grad_norm_off != pytest.approx(grad_norm_on)
+
+
+# -- Wave F: MoE / MTP integration (phase 5) ---------------------------------------
+
+
+@pytest.mark.parametrize("balancing", ["aux_loss", "bias_free"])
+def test_moe_aux_metrics_appear_in_metrics_jsonl(tmp_path, balancing):
+    moe_cfg = {"n_experts": 4, "n_shared": 1, "top_k": 2, "balancing": balancing}
+    trainer = make_tiny_trainer(tmp_path, "moe_run", model_overrides={"moe": moe_cfg})
+    _, _, _, aux = trainer.train_step()
+    trainer._log(0, 1.0, 1.0, 1e-3, 100.0, None, aux)
+    last = json.loads(trainer.metrics_path.read_text().strip().splitlines()[-1])
+    assert "moe_aux_loss" in last
+    assert "expert_load" in last
+    assert len(last["expert_load"]) == 2  # one row per layer (n_layers=2 in make_tiny_trainer)
+    assert len(last["expert_load"][0]) == 4  # n_experts
+
+
+def test_mtp_loss_appears_in_metrics_jsonl(tmp_path):
+    trainer = make_tiny_trainer(tmp_path, "mtp_run", model_overrides={"mtp": {"n_predict_tokens": 1}})
+    _, _, _, aux = trainer.train_step()
+    trainer._log(0, 1.0, 1.0, 1e-3, 100.0, None, aux)
+    last = json.loads(trainer.metrics_path.read_text().strip().splitlines()[-1])
+    assert "mtp_loss" in last
+
+
+def test_moe_bias_free_routing_bias_moves_after_training_steps(tmp_path):
+    """End-to-end check that Trainer actually calls `update_moe_bias` -- the buffer should be
+    nonzero after a few real steps of a token stream that (at this tiny random-data scale) is
+    virtually guaranteed to route unevenly across only 4 experts."""
+    moe_cfg = {"n_experts": 4, "n_shared": 1, "top_k": 1, "balancing": "bias_free"}
+    trainer = make_tiny_trainer(tmp_path, "bias_run", model_overrides={"moe": moe_cfg})
+    run_n_steps(trainer, 8)
+    bias = trainer._raw_model.blocks[0].ffn.routing_bias
+    assert bias.abs().sum().item() > 0.0
+
+
+def test_evaluate_val_loss_excludes_aux_terms(tmp_path):
+    """Regression test for a real bug caught mid-Wave-F: `evaluate()` must report pure
+    next-token cross-entropy, NOT `forward()`'s combined (aux-weighted) training objective --
+    otherwise val_loss isn't comparable to every other wave's noise-floor convention. Two
+    identical models differing only in `moe.aux_loss_weight` (0.0 vs a deliberately huge 50.0)
+    must report the SAME val_loss despite very different train-time losses."""
+    import copy
+
+    (tmp_path / "low").mkdir()
+    (tmp_path / "high").mkdir()
+    moe_cfg_low = {"n_experts": 4, "n_shared": 1, "top_k": 2, "balancing": "aux_loss", "aux_loss_weight": 0.0}
+    moe_cfg_high = {"n_experts": 4, "n_shared": 1, "top_k": 2, "balancing": "aux_loss", "aux_loss_weight": 50.0}
+    t_low = make_tiny_trainer(tmp_path / "low", "low", model_overrides={"moe": moe_cfg_low})
+    t_high = make_tiny_trainer(tmp_path / "high", "high", model_overrides={"moe": moe_cfg_high})
+    t_high.model.load_state_dict(copy.deepcopy(t_low.model.state_dict()))
+
+    val_low = t_low.evaluate()
+    val_high = t_high.evaluate()
+    assert val_low == pytest.approx(val_high, abs=1e-5)
+
+
+def test_moe_resume_reproduces_the_same_loss_trajectory(tmp_path):
+    """Bit-exact resume (D-023's guarantee) must extend to MoE's new checkpointed buffers
+    (`routing_bias`, `_load_accum`) -- both are `register_buffer`s so `state_dict()` already
+    covers them, but this confirms it end-to-end rather than by inspection."""
+    moe_cfg = {"n_experts": 4, "n_shared": 1, "top_k": 2, "balancing": "bias_free"}
+    trainer = make_tiny_trainer(tmp_path, "run1", model_overrides={"moe": moe_cfg})
+    run_n_steps(trainer, 6)
+    ckpt_path = trainer.run_dir / "ckpt" / "latest.pt"
+    trainer.save_checkpoint(ckpt_path)
+    step_at_checkpoint = trainer.step
+
+    losses_uninterrupted = run_n_steps(trainer, 4)
+
+    resumed = make_tiny_trainer(tmp_path, "run2", model_overrides={"moe": moe_cfg})
+    resumed.load_checkpoint(ckpt_path)
+    assert resumed.step == step_at_checkpoint
+    losses_resumed = run_n_steps(resumed, 4)
+
+    assert losses_resumed == pytest.approx(losses_uninterrupted)

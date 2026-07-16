@@ -397,19 +397,146 @@ def test_mla_generate_with_and_without_cache_run(device):
     assert model.generate(prompt, 6, top_k=3, use_cache=False).shape == (1, 10)
 
 
-# -- deferred techniques raise NotImplementedError ------------------------------
+# -- MoE + MTP (phase 5-F, DeepSeek specials) ------------------------------------
 
 
-def test_moe_raises_not_implemented():
-    cfg = tiny_config(moe={"n_experts": 4, "n_shared": 1, "top_k": 2})
+@pytest.mark.parametrize("balancing", ["aux_loss", "bias_free"])
+def test_moe_instantiates_and_runs(device, balancing):
+    cfg = tiny_config(moe=dict(n_experts=4, n_shared=1, top_k=2, balancing=balancing))
+    model = GPT(cfg).to(device)
+    x = torch.randint(0, cfg.vocab_size, (3, 10), device=device)
+    y = torch.randint(0, cfg.vocab_size, (3, 10), device=device)
+    logits, loss = model(x, y)
+    assert logits.shape == (3, 10, cfg.vocab_size)
+    assert torch.isfinite(loss)
+    loss.backward()
+    # every expert must receive a real gradient (bias-free's zero aux loss shouldn't disconnect
+    # the routed path -- output combination is still differentiable through gate_probs/experts)
+    assert all(e.down_proj.weight.grad is not None for e in model.blocks[0].ffn.experts)
+
+
+def test_moe_active_params_roughly_match_dense_baseline():
+    """DeepSeekMoE's headline claim: fine-grained experts sized so ACTIVE params/token (shared +
+    top_k) roughly equal a same-shape dense FFN, while TOTAL params are much larger."""
+    dense_cfg = tiny_config()
+    moe_cfg = tiny_config(moe=dict(n_experts=8, n_shared=1, top_k=2))
+    dense_ffn_params = sum(p.numel() for p in GPT(dense_cfg).blocks[0].ffn.parameters())
+    moe_ffn = GPT(moe_cfg).blocks[0].ffn
+    active_experts = moe_ffn.shared_experts[0]
+    active_params = sum(p.numel() for p in active_experts.parameters()) * (1 + 2)  # n_shared+top_k
+    assert abs(active_params - dense_ffn_params) / dense_ffn_params < 0.15
+    total_moe_params = sum(p.numel() for p in moe_ffn.parameters())
+    assert total_moe_params > 2 * dense_ffn_params  # much more total capacity than active
+
+
+def test_moe_expert_load_sums_to_top_k_fraction():
+    """Every token contributes exactly `top_k` routing slots, so the per-expert load fractions
+    (each = tokens routed to that expert / total tokens) must sum to top_k across all experts."""
+    cfg = tiny_config(moe=dict(n_experts=4, n_shared=1, top_k=2))
+    model = GPT(cfg)
+    x = torch.randint(0, cfg.vocab_size, (3, 10))
+    model(x)  # no targets -> just exercises MoEFFN.forward directly via the block
+    load = model.blocks[0].ffn.last_expert_load
+    assert torch.allclose(load.sum(), torch.tensor(2.0), atol=1e-5)
+
+
+def test_moe_aux_loss_only_active_for_aux_loss_balancing():
+    x = torch.randint(0, 256, (3, 10))
+    y = torch.randint(0, 256, (3, 10))
+    aux_cfg = tiny_config(moe=dict(n_experts=4, n_shared=1, top_k=2, balancing="aux_loss"))
+    bias_cfg = tiny_config(moe=dict(n_experts=4, n_shared=1, top_k=2, balancing="bias_free"))
+    aux_model = GPT(aux_cfg)
+    aux_model(x, y)
+    bias_model = GPT(bias_cfg)
+    bias_model(x, y)
+    assert aux_model.blocks[0].ffn.last_aux_loss.item() != 0.0
+    assert bias_model.blocks[0].ffn.last_aux_loss.item() == 0.0
+
+
+def test_moe_bias_free_update_direction():
+    """DeepSeek-V3 S2.1.2's rule: an overloaded expert's bias should decrease (less likely to be
+    picked next), an underloaded one's should increase -- gradient-free, buffer-only."""
+    cfg = tiny_config(moe=dict(n_experts=4, n_shared=1, top_k=1, balancing="bias_free"))
+    model = GPT(cfg)
+    ffn = model.blocks[0].ffn
+    ffn.train()
+    ffn._load_accum[:] = torch.tensor([100.0, 0.0, 0.0, 0.0])
+    before = ffn.routing_bias.clone()
+    ffn.update_bias(0.01)
+    assert ffn.routing_bias[0] < before[0]
+    assert (ffn.routing_bias[1:] > before[1:]).all()
+    assert torch.equal(ffn._load_accum, torch.zeros(4))  # accumulator resets after each update
+
+
+def test_moe_update_bias_noop_for_aux_loss_balancing():
+    cfg = tiny_config(moe=dict(n_experts=4, n_shared=1, top_k=1, balancing="aux_loss"))
+    model = GPT(cfg)
+    model.update_moe_bias(0.01)  # must not raise (no routing_bias buffer exists at all)
+
+
+@pytest.mark.parametrize("n_predict_tokens", [1, 3])
+def test_mtp_predicts_and_backprops(device, n_predict_tokens):
+    cfg = tiny_config(mtp=dict(n_predict_tokens=n_predict_tokens))
+    model = GPT(cfg).to(device)
+    x = torch.randint(0, cfg.vocab_size, (3, 10), device=device)
+    y = torch.randint(0, cfg.vocab_size, (3, 10), device=device)
+    logits, loss = model(x, y)
+    assert torch.isfinite(loss)
+    assert "mtp_loss" in model.last_aux_metrics
+    loss.backward()
+    assert model.mtp_heads[0].combine.weight.grad is not None
+
+
+def test_mtp_short_sequence_falls_back_to_main_loss_only():
+    """T=1: no depth has a valid (h_prev, next_emb, target) triple, so `_mtp_loss` returns None
+    and the total loss is just the main cross-entropy -- must not crash."""
+    cfg = tiny_config(mtp=dict(n_predict_tokens=2))
+    model = GPT(cfg)
+    x = torch.randint(0, cfg.vocab_size, (2, 1))
+    y = torch.randint(0, cfg.vocab_size, (2, 1))
+    logits, loss = model(x, y)
+    assert torch.isfinite(loss)
+    assert "mtp_loss" not in model.last_aux_metrics
+
+
+@pytest.mark.parametrize("pos_encoding", ["learned", "sinusoidal"])
+def test_mtp_requires_position_encoding_injected_per_block(pos_encoding):
     with pytest.raises(NotImplementedError):
-        GPT(cfg)
+        GPT(tiny_config(pos_encoding=pos_encoding, mtp=dict(n_predict_tokens=1)))
 
 
-def test_mtp_raises_not_implemented():
-    cfg = tiny_config(mtp={"n_predict_tokens": 2})
-    with pytest.raises(NotImplementedError):
-        GPT(cfg)
+def test_mtp_alibi_runs():
+    cfg = tiny_config(pos_encoding="alibi", mtp=dict(n_predict_tokens=2))
+    model = GPT(cfg)
+    x = torch.randint(0, cfg.vocab_size, (2, 8))
+    y = torch.randint(0, cfg.vocab_size, (2, 8))
+    _, loss = model(x, y)
+    assert torch.isfinite(loss)
+    loss.backward()
+
+
+def test_moe_and_mtp_combined_runs():
+    cfg = tiny_config(
+        moe=dict(n_experts=4, n_shared=1, top_k=2, balancing="bias_free"),
+        mtp=dict(n_predict_tokens=1),
+    )
+    model = GPT(cfg)
+    x = torch.randint(0, cfg.vocab_size, (2, 8))
+    y = torch.randint(0, cfg.vocab_size, (2, 8))
+    _, loss = model(x, y)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert set(model.last_aux_metrics.keys()) == {"ce_loss", "moe_aux_loss", "expert_load", "mtp_loss"}
+
+
+def test_num_params_breakdown_matches_total_with_moe_and_mtp():
+    cfg = tiny_config(
+        moe=dict(n_experts=4, n_shared=1, top_k=2), mtp=dict(n_predict_tokens=2)
+    )
+    model = GPT(cfg)
+    breakdown = model.num_params(breakdown=True)
+    assert breakdown["total"] == model.num_params()
+    assert breakdown["mtp"] > 0
 
 
 # -- named tier configs (the actual configs/*.yaml) ------------------------------

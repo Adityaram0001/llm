@@ -41,6 +41,8 @@ class MoEConfig:
     n_shared: int
     top_k: int
     balancing: Literal["aux_loss", "bias_free"] = "aux_loss"
+    aux_loss_weight: float = 0.01  # coefficient on the Switch-style balancing loss (balancing="aux_loss")
+    bias_update_rate: float = 0.001  # per-step bias nudge (DeepSeek-V3, balancing="bias_free")
 
 
 @dataclass
@@ -48,6 +50,7 @@ class MTPConfig:
     """Multi-Token Prediction (DeepSeek-V3) — phase 5-F."""
 
     n_predict_tokens: int
+    loss_weight: float = 0.3  # lambda on the averaged MTP cross-entropy (DeepSeek-V3's own default)
 
 
 @dataclass

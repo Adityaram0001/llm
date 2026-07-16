@@ -1640,3 +1640,85 @@ doc-only fix (rejected — already tried, already failed once); hard error inste
 hand-copied YAML — the sweet-spot value could then be injected automatically per-device instead
 of relying on a human noticing the warning.
 
+
+## D-044 — Wave F (DeepSeek specials): implemented MoE + MTP; DeepSeekMoE reproduces its headline win; caught and fixed a real val_loss measurement bug before drawing any conclusion  (2026-07-16, phase 5)
+**Decision:** Implemented the phase 5 spec's Wave F in full: `src/llmlab/model/moe.py`
+(`MoEFFN` — 8 fine-grained routed experts + 1 shared, top-2 routing, expert hidden dim sized so
+ACTIVE params/token match the dense baseline's FFN, per DeepSeekMoE section 3.1's fine-grained
+segmentation; two balancing methods, `aux_loss` Switch/GShard-style and `bias_free` DeepSeek-V3
+S2.1.2's per-expert selection-only bias) and `src/llmlab/model/mtp.py` (`MTPHead` — sequential
+Multi-Token-Prediction depths, each combining the previous depth's hidden state with the true
+teacher-forced next-token embedding through one more transformer `Block`, sharing the main
+model's `final_norm`+`lm_head`). Both wired through `Block`/`GPT`/`Trainer` with no new
+NotImplementedError guards — `moe`/`mtp` config fields are now fully live. +34 tests (127 local
+cpu/mps, 98 remote-cuda, all pass).
+
+**Design choices worth recording:**
+- **Expert sizing:** `expert_hidden = round(dense_hidden / (n_shared + top_k))` — at S-tier
+  (d_model=192, dense hidden=512, 8 routed + 1 shared, top-2) this gives expert_hidden=171,
+  landing total active FFN params within ~0.1% of the dense control's 4.42M while total FFN
+  capacity grows to 13.32M (9 expert-equivalents vs 1) — total model 18.61M vs control's 9.71M.
+- **Routing:** router is a plain linear + softmax over all `n_experts`; combination weights for
+  the selected top-k always come from this UNBIASED softmax (`gate_probs`), renormalized to sum
+  to 1 across the selected experts. `bias_free`'s per-expert bias is added ONLY to the logits
+  used for top-k SELECTION, never to the combination weight and never part of any loss —
+  matches DeepSeek-V3's explicit design (bias moves who gets picked, not how much a picked
+  expert's output counts).
+- **aux_loss formula:** per-layer `n_experts * sum(f_i * P_i)` (`f_i` = stop-grad routed-token
+  fraction, `P_i` = mean softmax probability mass, both across the current batch), summed
+  (not averaged) across all `n_layers` MoE layers before applying `aux_loss_weight` — this
+  matters for interpreting the raw `moe_aux_loss` metric (~1.0/layer at good balance, so ~15 at
+  15 layers), see the bug below.
+- **bias_free update rule:** `routing_bias += update_rate * sign(mean_load - load)`, called once
+  per OPTIMIZER step (not per micro-batch) by a new `Trainer` hook (`GPT.update_moe_bias`),
+  aggregating load across all of that step's grad-accum micro-batches — gradient-free, a plain
+  buffer update, no interaction with `loss.backward()`/`opt.step()`.
+- **MTP simplification (flagged, not a bug):** the MTP block is always DENSE (non-MoE) even when
+  the main trunk uses MoE FFN layers, and always mirrors the main trunk's attention type —
+  avoids nesting a second independent MoE router+expert set behind one extra head. MTP requires
+  `pos_encoding` in `{rope, alibi, none}` (raises `NotImplementedError` for learned/sinusoidal —
+  those add position at the input embedding stage, which MTP heads never pass through; rope/
+  alibi both inject position per-block, which the MTP block's fresh `Block` call reuses
+  unmodified since the retained subsequence is always the ORIGINAL left-aligned prefix).
+
+**A real bug found and fixed mid-wave — the more important story:** the first attempt at both
+MoE runs computed `Trainer.evaluate()`'s `val_loss` from `GPT.forward()`'s COMBINED training
+objective (main cross-entropy + `aux_loss_weight * moe_aux_loss`), not pure CE. Because
+`moe_aux_loss` sums across all 15 layers (~15 at good balance) and `aux_loss_weight=0.01`, this
+silently added ~+0.15 to the `aux_loss` run's reported metric while `bias_free`'s (correctly
+exactly zero by design, since that method has no loss term at all) was unaffected by the same
+bug — producing a fake ~0.15 "aux_loss balancing is worse" gap between the two runs that would
+have read as a real, interesting finding if not caught. Caught by checking the raw numbers
+against the D-035 noise floor before writing any verdict (0.15 is 7-10x the floor — implausibly
+large for what should be a close comparison) — another instance of this project's now-recurring
+pattern (D-022, D-023, D-032, D-042, D-043) of a plausible-looking automated result turning out
+to be a measurement artifact, not a real effect. **Fix:** `GPT.forward()` now stores pure CE in
+`self.last_aux_metrics["ce_loss"]` before any aux term is added to the returned (combined)
+`loss`; `Trainer.evaluate()` reads `ce_loss` instead of `forward()`'s return value, so `val_loss`
+stays directly comparable to every other wave's (docs/EXPERIMENTS.md's noise-floor convention
+only ever measured plain CE). `train_step`'s reported `train_loss` is UNCHANGED (still the
+combined objective) — matches the existing z-loss precedent, where `train_loss` has always meant
+"whatever was actually optimized," not pure CE. Added a regression test
+(`test_evaluate_val_loss_excludes_aux_terms`) proving `val_loss` is identical regardless of
+`aux_loss_weight`. The two buggy run folders (fresh this session, no notes.md/verdict ever
+written, registry rows still auto-generated placeholders) were deleted rather than kept as
+confusing superseded duplicates in the lab record, then re-run clean with the fix in place —
+correct per the system's "own-session scratch work" carve-out to CLAUDE.md's don't-delete-runs
+rule, not a precedent for deleting any run with an actual conclusion attached.
+
+**Results (post-fix, real numbers — see `docs/results/ablation_log.md` for the full writeup):**
+DeepSeekMoE reproduces its headline win at S-tier (-0.09 vs control on both balancing methods,
+>4x noise floor) — more total capacity via fine-grained experts genuinely helps at matched
+active params/token. The two balancing methods are statistically tied on final quality (0.008
+apart) but differ measurably in balancing SPEED (aux_loss's gradient signal balances by step
+~200; bias_free's bounded per-step nudge takes until step ~800-1000) — a real, clean
+reproduction of the mechanistic tradeoff DeepSeek-V3's paper describes. MTP is not
+distinguishable from noise at this scale/token budget (+0.017, at the noise floor's edge),
+though the extra head does demonstrably learn its own (harder) task.
+
+**Revisit if:** MTP is worth a follow-up sweep (`loss_weight`, `n_predict_tokens>1`) at a larger
+tier/token budget before ruling it out of the phase-9 capstone recipe; DeepSeekMoE is a strong
+capstone candidate if the L-tier's total-parameter budget can absorb ~2x growth for the FFN
+layers. Any future wave computing a NEW auxiliary/regularization loss term inside `GPT.forward`
+should follow this fix's pattern (store pure CE separately, keep it out of the eval metric)
+rather than re-deriving the lesson.
