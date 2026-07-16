@@ -182,3 +182,52 @@ optimizer step, `last_aux_metrics` for logging). +34 tests (127 local, 98 remote
   interference matters more than balancing speed, aux_loss otherwise). MTP is not yet justified
   at S-tier/this token budget; worth revisiting at M/L-tier or with a `loss_weight`/
   `n_predict_tokens` sweep before including it in the capstone recipe.
+
+## Wave G — Data & scaling (2026-07-16)
+
+Three studies, 11 runs total, all on the RTX 5090. New corpus content: 62 public-domain
+finance/self-help/wisdom-practical books (RW-4, D-045), curated from local Gutenberg catalog
+data across Finance/Investing/Economics/Business/Self-Help/Personal-Development/Wisdom &
+Philosophy categories — a deliberately different register from the 112-book academic-philosophy
+corpus already in use. New code: `domain: true` book routing (`acquire.build_books`),
+`--domain-books`/`--books-only` tokenize modes, `scripts/plot_wave_g.py`. Figure:
+`docs/results/wave_g_data_scaling.png`.
+
+- **Domain-mix ablation (RW-4, 4 runs, fixed 49.15M-token budget — reduced from the usual
+  ~98.3M so the 50%-share point stays within the spec's "≤4 domain epochs" design constraint,
+  see D-045):** strictly monotonic dose-response — general val_loss degrades 0% → 10% → 25% →
+  50% domain share (3.980 → 4.015 → 4.055 → 4.144), the 50% point >8x the D-035 noise floor
+  (scale reference only; that floor was measured at a different budget). **Confirms the
+  specialization-vs-generality tradeoff is real and monotonic** — mixing in enough
+  finance/wisdom data to matter necessarily costs general-corpus quality. Qualitative check:
+  domain-inflected vocabulary is visible in samples at just 49M tokens.
+- **Multi-epoch overfitting lab (books-only, 3 runs, fixed pool = 14.14M tokens, 1/4/16
+  epochs):** train/val gap opens monotonically (+0.268 → +0.344 → +0.921) exactly as the spec
+  predicted — but val_loss itself never gets WORSE at this scale/budget, it plateaus
+  (5.695 → 4.448 → 4.128) while train_loss keeps falling (5.427 → 4.104 → 3.207). A real,
+  textbook "gap opens" result, distinct from the scaling law's finding below (there, val loss
+  does turn around and rise).
+- **Mini scaling law (4 runs, 5/10/25/50M params, fixed 200M tokens ≈ 11.3 epochs over the same
+  17.66M-token books+dictionary pool, lr fixed at 1e-3 across all sizes — not muP-retuned, a
+  real caveat):** fit on best/early-stopped val_loss gives L(N) ≈ 11909.67·N^-0.694 + 3.102 (a
+  much steeper, noisier alpha than Chinchilla's ~0.34 — expected from only 4 points spanning
+  1 order of magnitude, a fixed-lr setup, and a data-constrained rather than fresh-token
+  regime). **The headline finding is qualitative, not the fit:** 5M/10M are still monotonically
+  improving at the end of the budget (best=final), but 25M starts overfitting the repeated pool
+  before the budget ends (best 3.1655 @ step 2400 → final 3.1789, +0.0134 gap) and **50M
+  overfits far earlier and harder** (best 3.1701 @ step 1650, barely past half the budget →
+  final 3.2789, +0.1088 gap) while its train_loss keeps falling to 2.285, the lowest of any
+  size. **Bigger models overfit a small, heavily-repeated token budget faster** — a clean
+  empirical tie to this project's own already-established Muennighoff-ceiling concept
+  (RW-1/D-015: repeated-data returns diminish past ~4 epochs). Using each run's FINAL number
+  instead of its BEST would have made 50M look worse than 25M and badly misrepresented the true
+  capacity-vs-loss relationship — a fixed-STEP budget comparison across model sizes needs
+  early-stopping (or a fixed-epoch budget) to stay fair.
+- **Verdict for phase 9's recipe:** for a finance/wisdom-flavored capstone, budget domain share
+  in the 10-25% range (RW-4's original 10-20% recommendation) rather than 50% — the general-val
+  cost keeps growing past 25% with no sign of a plateau in this sweep, and the domain corpus's
+  raw 6.76M-token pool would need proportionally more real book acquisition to support a bigger
+  share at L-tier's much larger token budget anyway. For the L-tier hero run, plan on genuinely
+  fresh tokens (or ≤4x repetition) rather than the heavy repetition this wave deliberately used
+  to keep S-tier runs fast — Wave G's own scaling-law finding shows repetition-driven overfitting
+  gets WORSE, not better, as parameter count grows toward L-tier's ~100M.

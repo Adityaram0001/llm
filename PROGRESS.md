@@ -3,16 +3,45 @@
 > Every Claude session reads this first and updates it last. Keep it honest and terse.
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
-**Active phase:** Phase 4 is **done** (milestone M1 declared). Phase 5
-(`docs/phases/phase5_ablations.md`) is **in-progress**: seed-noise study done (D-035), **Wave A
-done (D-036)**, **Wave B done (D-037)**, **Wave C done (D-038)**, **Wave D done (D-039)**, **Wave
-E done (D-040)**, **Wave F done (D-044)**. **Waves A-D done = the M2 milestone is DECLARED**
-(Waves E/F aren't part of M2's exit criteria but are now done too). Wave G (data & scaling —
-multi-epoch overfitting lab, dictionary ablation, RW-4 domain-mix ablation, mini scaling law) is
-next and is the LAST wave of phase 5 — once it lands, write `docs/results/recipe.md` (deferred
-since Wave C) and phase 5 can be marked fully done.
+**Active phase:** Phase 4 is **done** (milestone M1 declared). **Phase 5
+(`docs/phases/phase5_ablations.md`) is now DONE** — seed-noise study (D-035), Wave A (D-036),
+Wave B (D-037), Wave C (D-038), Wave D (D-039), Wave E (D-040), Wave F (D-044), and **Wave G
+(D-045, this session)** all landed with verdicts; `docs/results/recipe.md` written (consolidates
+every wave for phase 9). One explicitly-deferred sub-item remains: Wave G's dictionary ablation
+("with vs without dictionary in the mix → does 'define X' improve?") needs phase-6 eval probes
+that don't exist yet — the phase-5 spec itself flagged this as OK to defer ("can run later"), so
+it's parked as a phase-6 pickup item, not a gap in phase 5's exit criteria (which only required
+waves A-D + recipe.md, both satisfied). **Phase 6 (evaluation suite) is next.**
 
-**This session (2026-07-16, Wave F — DeepSeek specials, MoE + MTP):** implemented
+**This session (2026-07-16, Wave G — data & scaling, LAST wave of phase 5):** resolved RW-4
+(open since phase 1): curated **62 public-domain finance/self-help/wisdom-practical books**
+(Adam Smith, Ricardo, Bagehot, Keynes, Ford, Taylor, Samuel Smiles, James Allen, Orison Swett
+Marden, Russell Conwell, Barnum, Hubbard, Ruskin, Booker T. Washington, etc.) from local
+Gutenberg catalog data, hand-vetted out of a noisy auto-categorized list (excluded fiction,
+off-theme academic psychology, one low-quality modern author). New general-purpose pipeline
+code: `domain`-tagged book routing (`acquire.build_books`), `--domain-books`/`--books-only`
+tokenize modes — no loader changes needed (`MixedSourceLoader`'s per-source weights already
+supported this). Ran 11 S-tier runs on the RTX 5090 (singapore-b:25864): **domain-mix ablation
+(4 runs, D-045)** found a strictly monotonic general-val-loss cost as finance/wisdom share rises
+(0%→10%→25%→50%: 3.980→4.015→4.055→4.144) — recommend 10-25% share for the capstone, not 50%.
+**Multi-epoch overfitting lab (3 runs)** confirmed the train/val gap opens as predicted
+(+0.268→+0.344→+0.921 at 1/4/16 epochs) even though val_loss itself plateaus rather than
+worsening at this scale. **Mini scaling law (4 runs, 5/10/25/50M params @ fixed 200M tokens)**
+found the real headline result: comparing each run's BEST (early-stopped) vs FINAL val_loss
+shows 5M/10M still improving at the end, but **25M and especially 50M overfit the repeated
+17.66M-token pool well before the budget ends** (50M peaks at step 1650 of 3050, then worsens
++0.109 while train_loss keeps falling) — bigger models overfit a small repeated pool FASTER, a
+clean tie to the project's own Muennighoff-ceiling concept (D-015/RW-1). Fit
+`L(N)=11909.67·N^-0.694+3.102` on best values (final values would have mis-ranked 25M vs 50M).
+`notebooks/07_scaling_law.ipynb` (executes cleanly) reproduces every number. **Wrote
+`docs/results/recipe.md`** (deferred since Wave C) consolidating all 7 waves' winning choices
+into phase 9's starting config, with an explicit "still open" section. Figure:
+`docs/results/wave_g_data_scaling.png`. 11 runs registered with real verdicts, +0 new tests
+needed (no new model/trainer code, only data-pipeline additions). **GPU LEFT RUNNING
+(singapore-b:25864) — user must stop it to stop billing** once satisfied everything synced down
+correctly.
+
+**Earlier (2026-07-16, Wave F — DeepSeek specials, MoE + MTP):** implemented
 `src/llmlab/model/moe.py` (`MoEFFN` — 8 fine-grained routed experts + 1 shared, top-2, expert
 hidden sized so active params/token match the dense baseline) and `src/llmlab/model/mtp.py`
 (`MTPHead` — sequential Multi-Token-Prediction depths sharing the main output head), wired
@@ -250,7 +279,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 | 2 | Tokenizers (scratch + HF) | `docs/phases/phase2_tokenizer.md` | done |
 | 3 | Model architecture | `docs/phases/phase3_architecture.md` | done |
 | 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | done |
-| 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | in-progress |
+| 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | done |
 | 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | todo |
 | 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | todo |
 | 8 | Fine-tuning: SFT / LoRA / DPO | `docs/phases/phase8_finetuning.md` | todo |
@@ -407,11 +436,24 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   fixed before any verdict was written (moe_aux_loss was silently leaking into the eval metric —
   see D-044); covered by a new regression test. 3 runs registered, +34 tests (127 local, 98
   remote-cuda). Figure: `docs/results/wave_f_deepseek_specials.png`.
-- [ ] Wave G — Data & scaling (multi-epoch overfitting lab, dictionary ablation, RW-4 domain-mix
-  ablation, mini scaling law `notebooks/07_scaling_law.ipynb`) — the LAST wave of phase 5
+- [x] Wave G — Data & scaling (D-045), the LAST wave of phase 5. **Multi-epoch overfitting lab**
+  (3 runs, books-only 14.14M-token pool, 1/4/16 epochs): train/val gap opens as predicted
+  (+0.268→+0.344→+0.921) though val_loss itself plateaus rather than worsening at this scale.
+  **RW-4 domain-mix ablation** (4 runs, 62 newly-curated finance/self-help/wisdom books, fixed
+  49.15M-token budget): strictly monotonic general-val-loss cost as domain share rises
+  (0%→10%→25%→50%: 3.980→4.015→4.055→4.144) — recommend 10-25% share for the capstone.
+  **Mini scaling law** (4 runs, 5/10/25/50M params @ fixed 200M tokens,
+  `notebooks/07_scaling_law.ipynb`): bigger models (25M, especially 50M) overfit the repeated
+  17.66M-token pool well before the budget ends (50M peaks at step 1650/3050, then worsens
+  +0.109) — a real, size-dependent tie to the project's Muennighoff-ceiling concept; fit on
+  best/early-stopped val_loss, `L(N)=11909.67·N^-0.694+3.102`. **Dictionary ablation explicitly
+  deferred to phase 6** (needs eval probes that don't exist yet — the spec itself allows this).
+  Figure: `docs/results/wave_g_data_scaling.png`. 11 runs registered.
 - [x] Exit criteria (M2): waves A-D done + verdicts, figures in `docs/results/`, all runs
-  registered. **M2 DECLARED 2026-07-13.** `docs/results/recipe.md` (phase 9 input) still not
-  written — deferred until Wave G lands too, same reasoning as Wave C's session note.
+  registered. **M2 DECLARED 2026-07-13.**
+- [x] `docs/results/recipe.md` written 2026-07-16 (deferred since Wave C until Wave G landed) —
+  consolidates every wave's winning choices into phase 9's L-tier hero-run starting config.
+  **Phase 5 is now fully DONE.**
 
 ## Rework queue (see CLAUDE.md "Change management")
 
@@ -424,7 +466,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 
 **Open item for next session: `scripts/cloud/gpuhub_setup.sh` has an uncommitted local fix** (D-029's PATH/rclone fix) that was never pushed to GitHub — this caused the exact same bug to reproduce when setting up the RTX 5090 instance via the curl-from-GitHub one-liner (worked around via `scp` instead, see D-032). Ask the user whether to commit+push this session's changes (git commits are user-initiated per CLAUDE.md — not done automatically). Projected the L-tier hero run (2.1B tokens) at ~13.7hr/~$3.43 on this tier alone — cheaper than the original 5090 "$10-20" estimate; **update `configs/train_s_*.yaml` to `micro_batch=32` before any real run on this tier** (Mac's `micro_batch=16` default isn't gpuhub's optimum). `scripts/cloud/remote.env` is now filled in for this instance so `./scripts/cloud/sync_down.sh` is one command. **Remaining:** repeat only the CUDA-version check on an actual RTX 5090 once gpuhub has inventory (everything else already proven); also flagged (not fixed) — `GPT.forward()` blocks phase 5 Wave B's length-extrapolation probe (hard-rejects seq_len > `max_seq_len`), and `find_batch_size.py`'s `mem_gb` column is unreliable (see D-030). Live playbook: `docs/CLOUD_GPUHUB.md`. | D-017 (superseded for the active path by D-027) | 4 | in-progress (essentially done pending 5090 availability) |
 | RW-5 | `GPT.forward()` hard-rejects any sequence longer than `model_config.max_seq_len` (`ValueError`) — blocked (a) phase 5 Wave B's length-extrapolation probe and (b) the phase-9 capstone's chat-usability goal (real, not just extrapolated, 2k+ context). **Part (a) DONE 2026-07-12 (D-037)**: `forward()`'s guard now only applies to `learned`/`sinusoidal` (physically bounded); rope/alibi/none can run past `max_seq_len` at eval time. Probe ran clean: ALiBi improves with length (ppl 32.56→31.67 @512→2048), RoPE degrades gracefully (33.24→45.68), NoPE collapses (40→732) — real data point for part (b)'s decision, arguing ALiBi deserves consideration alongside RoPE. **Part (b) still open**: `model_l.yaml`'s `max_seq_len` (currently 512, same as S/M) should be deliberately reconsidered for the L-tier capstone per the 2026-07-12 discussion (`docs/learnings/20260712_model-config-strategy.md`) — likely ~2048 native, and now also an open question of RoPE vs ALiBi for that tier given D-037's result | Discovered incidentally while GPU-benchmarking seq_len scaling (D-030); RoPE (already the project default, D-016) is one of the position encodings best suited to this, so the fix is well-aligned with existing choices | 5 (done) / 9 (L-tier capstone max_seq_len + pos_encoding decision, still open) | in-progress |
-| RW-4 | Domain corpus expansion (finance/self-help/wisdom): user picks PD-only books (Gutenberg-era finance/self-help classics — modern bestsellers are copyrighted), optionally + finance-filtered FineWeb-Edu slice; loader gets per-source mixing weights so domain share of the TRAINING STREAM (not disk) is explicit; keep domain repetition ≤~4 epochs. User's target: 10–20% (recommendation 15–25%); final % is the user's call when phase 4 builds the loader. Also: finance/wisdom probes in phase 6, domain-mix ablation in P5-G (specs updated) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 4 (loader + corpus) / 6 (probes) / 5-G (ablation) | todo |
+| RW-4 | Domain corpus expansion (finance/self-help/wisdom). **Corpus + ablation DONE 2026-07-16 (D-045)**: 62 PD books curated from local Gutenberg catalog data (finance/investing/economics/business + self-help/personal-development/wisdom-practical categories), `domain`-tagged routing added to `acquire.build_books`/`scripts/tokenize_corpus.py`, `MixedSourceLoader`'s existing per-source weights used unmodified. Domain-mix ablation (0/10/25/50% share) found a strictly monotonic general-val-loss cost — recommend **10-25% share** for the capstone (not the original 10-20% target's upper bound, and well short of 50%). **Still open:** finance/wisdom eval probes (phase 6) haven't been built yet; growing the 6.76M-token domain pool before L-tier's much bigger token budget is an open question (recipe.md flags it) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 6 (probes) / 9 (capstone domain-share decision) | in-progress (corpus+ablation done, probes open) |
 
 ## Parking lot (future ideas, deliberately not scheduled)
 
@@ -441,6 +483,11 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   ~2.18x fewer steps) at the same GPU-time budget. Worth resolving before phase 9 commits to MoE
   for the capstone if training wall-clock (not just token count) is a real constraint. See
   `docs/learnings/20260716_wave-f-deepseek-specials.md` §9.
+- **Wave G dictionary ablation (deferred, phase-5 spec explicitly allows this):** "with vs
+  without dictionary in the mix → does a 'define X' eval improve?" needs phase-6 eval probes
+  that don't exist yet. Pick this up once phase 6 builds its evaluation suite — it's a cheap
+  ablation (single training-data-mix axis, reuses the existing S-tier corpus, no new model
+  code) once the probe to measure it against exists.
 | RW-2 | ~~Recompute D-008/D-010 if L-tier grows beyond ~105M~~ — resolved by D-015: L-tier stayed at ~105M (95.6M active), in-range of existing extrapolations, no recompute needed | D-015 finalized tier sizes vocab-aware | 3 | done |
 
 ## Run ledger (latest 10 — full list in experiments/registry.csv)
@@ -456,6 +503,11 @@ from the phase-2 tokenizer study (`20260710_p2_tokenizer-*`) are also in the reg
 
 ## Notes for next session
 
+- **Phase 5 is fully done (2026-07-16).** Next session should read `docs/phases/
+  phase6_evaluation.md` and start phase 6 (evaluation suite). `docs/results/recipe.md` is the
+  input for eventually assembling the phase-9 hero config — read it before phase 9, not before
+  phase 6. RW-4's domain corpus (`data/tokenized/hf_bpe_16k/domain_books*.bin`, 62 books) is
+  ready for phase 6's finance/wisdom probes whenever those get built.
 - **The training engine is built** (this session): `src/llmlab/data/loader.py`
   (`MixedSourceLoader`/`Source`), `src/llmlab/train/{config,trainer}.py` (`TrainConfig`,
   `Trainer`), `scripts/train.py`, `scripts/find_batch_size.py`, plus

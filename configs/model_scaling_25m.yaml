@@ -1,0 +1,28 @@
+# Wave G mini scaling law point: ~25M params. See D-045 for the sizing search (head_dim=64
+# fixed, tied embeddings, vocab=16000 -- same conventions as S/M/L-tier).
+#
+# Param breakdown: embed 5.12M (20.7%) / attn 6.55M / ffn 13.10M / norms 0.01M -- total 24.79M
+
+vocab_size: 16000
+d_model: 320
+n_layers: 16
+n_heads: 5
+n_kv_heads: 5
+head_dim: 64
+max_seq_len: 512
+dropout: 0.0
+
+norm: rmsnorm
+norm_position: pre
+qk_norm: false
+
+pos_encoding: rope
+rope_theta: 10000.0
+
+ffn: swiglu
+ffn_mult: 2.6667
+
+attention: mha_gqa
+
+tie_embeddings: true
+init: gpt2

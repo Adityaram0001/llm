@@ -1722,3 +1722,109 @@ capstone candidate if the L-tier's total-parameter budget can absorb ~2x growth 
 layers. Any future wave computing a NEW auxiliary/regularization loss term inside `GPT.forward`
 should follow this fix's pattern (store pure CE separately, keep it out of the eval metric)
 rather than re-deriving the lesson.
+
+
+## D-045 — Wave G (data & scaling): curated RW-4's domain corpus (62 books), ran the domain-mix ablation + multi-epoch overfitting lab + mini scaling law; bigger models overfit a fixed repeated pool faster  (2026-07-16, phase 5)
+**Decision:** Implemented the phase 5 spec's Wave G — the last wave of phase 5 — in full,
+resolving RW-4 (open since phase 1) along the way.
+
+**RW-4 resolved: curated 62 public-domain finance/self-help/wisdom-practical books.** User
+asked for a higher count than the initially-suggested 5-8 titles and pointed at local Gutenberg
+catalog data (`/Users/adityaram/2026/random/books/data`, not part of this repo) for candidates.
+Filtered `gutenberg_books_by_category.csv` (Finance/Investing/Economics/Business/Self-Help/
+Personal-Development/Wisdom & Philosophy/Leadership categories — noisy auto-categorization,
+lots of mis-tagged fiction like "The Merchant of Venice" filed under Finance) down to 62
+hand-vetted nonfiction titles (Adam Smith, Ricardo, Bagehot, Bastiat, Keynes, Veblen, Ford,
+Taylor, Tarbell, Samuel Smiles, James Allen, Orison Swett Marden, Russell Conwell, P.T. Barnum,
+Elbert Hubbard, Ruskin, Booker T. Washington, etc.), verified every URL resolves (HTTP 200),
+and cross-checked against the 112 books already in the corpus to avoid duplicates (caught and
+removed 2: Adam Smith's *Wealth of Nations* and *Theory of Moral Sentiments* were already
+present under the general philosophy corpus). Deliberately excluded fiction (hundreds of
+Horatio Alger juvenile novels auto-tagged "Self Help"), off-theme academic psychology (Freud),
+and one modern self-published author (Vaknin) whose register/quality didn't fit. 3 books held
+out as a domain val split (Ruskin's *Unto This Last*, Selden's *Psychology of the Stock
+Market*, Marden's *Pushing to the Front* — one per sub-genre). Real corpus size: 6,757,997
+train tokens / 560,851 val tokens at 16k vocab (measured, not chars/4-estimated).
+
+**New pipeline code, general-purpose (not a one-off script):** `book.get("domain", False)` in
+`configs/corpus.yaml` routes a book to `data/clean/domain_books/` instead of `data/clean/
+books/` (`acquire.build_books`, `scripts/build_corpus.py`); `scripts/tokenize_corpus.py` gained
+`--domain-books` (tokenizes the new pool into `domain_books.bin`/`domain_books_val.bin`) and
+`--books-only` (tokenizes just `data/clean/books/`, excluding the dictionary, into
+`books_only.bin`/`books_only_val.bin` — needed for the multi-epoch lab below, isolating prose
+memorization from the dictionary's short structured entries). Both reuse `MixedSourceLoader`'s
+existing per-source-weight design (RW-1/RW-4 were built with this in mind from the start,
+D-clarified in the loader's own docstring) — no loader changes needed, only new `Source` config
+entries pointing at the new `.bin` files.
+
+**Domain-mix ablation (RW-4's flagship question, 4 runs):** `sources: [books_dict weight=1-s,
+domain_books weight=s]` for s in {0, 0.10, 0.25, 0.50}, eval always against the GENERAL val set
+(the question is "what does this cost general quality," not domain quality — a domain probe is
+phase-6 work, not built yet). **Deliberately used a smaller fixed budget (49.15M tokens, not
+the usual ~98.3M)** — the domain pool is only 6.76M raw tokens, and 50% share of the standard
+budget would need ~7.3 epochs of domain repetition, breaking the spec's own "domain repetition
+≤4 epochs" rule; at 49.15M tokens the worst case (50% share) is ~3.6 epochs, back in bounds.
+This means these val_loss numbers are comparable to each other but NOT to any other wave's
+noise floor (D-035 was measured at a different budget). **Result: a strictly monotonic
+dose-response** — val_loss 3.980 → 4.015 → 4.055 → 4.144 at 0/10/25/50% share, the 50% point
+>8x the noise floor's scale (rough reference only). Confirms the specialization-vs-generality
+tradeoff is real from the very first step up (10%) and keeps growing with no plateau by 50%.
+
+**Multi-epoch overfitting lab (3 runs, books-only pool = 14,141,233 tokens):** 1/4/16 epochs
+(216/864/3456 steps). **Result: the train/val gap opens exactly as predicted** (+0.268 →
++0.344 → +0.921) but val_loss itself never worsens at this scale/budget — it plateaus
+(5.695 → 4.448 → 4.128) while train_loss keeps falling (5.427 → 4.104 → 3.207). The gap, not
+the val-loss level, is the earlier/more sensitive overfitting signal.
+
+**Mini scaling law (4 runs, 5/10/25/50M params, fixed 200M tokens ≈ 11.3 epochs over the SAME
+17.66M-token books+dictionary pool as every other S-tier wave):** 10M point reuses
+`configs/model_s.yaml` directly rather than a new config (already within 2.9% of the target and
+the project's most battle-tested shape); 5M/25M/50M sized by a parameter-count search
+(`head_dim=64` fixed, tied embeddings, vocab=16000). `lr` held fixed at 1e-3 across all 4 sizes
+(not muP-retuned per size — a real, flagged caveat). **The headline finding, discovered by
+comparing each run's BEST (early-stopped) val_loss against its FINAL (end-of-budget) value:**
+5M/10M are still monotonically improving at step 3050 (best=final), but **25M peaks at step
+2400 (~157M tok, ~8.9 epochs) then worsens by +0.013**, and **50M peaks at step 1650 — barely
+past half its budget (~108M tok, ~6.1 epochs) — then worsens by +0.109** while its train_loss
+keeps falling to 2.285 (the lowest of any size). **Bigger models overfit a small, fixed,
+heavily-repeated token pool faster, not slower** — ties directly to the project's own
+already-established Muennighoff-ceiling concept (D-015/RW-1: repeated-data returns diminish
+past ~4 epochs), now shown as a function of model size, not just repetition count. The fit
+`L(N) = 11909.67·N^-0.694 + 3.102` uses BEST values for exactly this reason — fitting on FINAL
+values would have made 50M look worse than 25M and misrepresented the true capacity-vs-loss
+relationship. Alpha (0.694) is far steeper/noisier than Chinchilla's ~0.34, expected from only
+4 points across one order of magnitude at a fixed (non-muP) lr in a data-constrained regime —
+treated as a qualitative signal, not extrapolated precisely to L-tier.
+
+**New code:** `domain`-tag routing in `acquire.build_books`/`scripts/build_corpus.py`;
+`--domain-books`/`--books-only` in `scripts/tokenize_corpus.py`; `scripts/plot_wave_g.py`
+(includes a numpy-only power-law grid-search fit — no new scipy dependency for one curve_fit
+call). 62 new book entries in `configs/corpus.yaml`; 11 new train configs
+(`configs/train_s_wave_g_*`, `configs/train_scaling_*`) + 3 new model configs
+(`configs/model_scaling_{5m,25m,50m}.yaml`). `notebooks/07_scaling_law.ipynb` (executes
+cleanly, reproduces every number in this entry). Figure: `docs/results/wave_g_data_scaling.png`.
+11 runs registered with real verdicts (not placeholders) in `experiments/registry.csv`; 5-line
+summary appended to `docs/results/ablation_log.md`.
+
+**`docs/results/recipe.md` written** (deferred since Wave C, per the phase-5 spec's exit
+criteria) — consolidates every wave's winning choices (A-G) into the phase-9 hero-run input,
+with an explicit "still open" section (RoPE-vs-ALiBi + max_seq_len for L-tier per RW-5b; MoE's
+untested equal-wall-clock question; exact domain-mix share; whether to grow the domain corpus).
+
+**Phase 5 is now fully done** — all 7 waves (A-G) complete with verdicts, figures in
+`docs/results/`, every run registered, recipe.md written. Phase 6 (evaluation suite) is next.
+
+**Options considered:** using the standard ~98.3M-token budget for the domain-mix ablation and
+just accepting >4 epochs of domain repetition at 50% share (rejected — would violate the
+spec's own design constraint for exactly the point that most needs to be trustworthy); fitting
+the scaling law on final val_loss for a simpler notebook (rejected once the 50M run's
+overfitting was found — would have reported a materially wrong shape, see D-022/D-023/D-032/
+D-042/D-043/D-044 for this project's now-long track record of catching measurement artifacts
+before writing verdicts); adding scipy for `curve_fit` (rejected — a ~15-line numpy-only
+grid-search over the one nonlinear parameter, `c`, avoids a new pinned dependency for a single
+call).
+
+**Revisit if:** the domain corpus needs to grow before L-tier (recipe.md flags this); the
+scaling law is worth re-running with per-size lr (muP-style) or fresh (non-repeated) tokens if
+a more rigorous alpha is ever needed; the equal-wall-clock MoE question (parking lot) gets
+picked up, since it also touches the "fixed tokens vs fixed compute" theme this wave surfaced.
