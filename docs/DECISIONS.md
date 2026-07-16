@@ -1495,4 +1495,54 @@ against the same control) — worth a quick joint-speedup confirmation before re
 product of the two independent percentages; or if the weight-tying question needs settling
 properly (param-matched untied run) before phase 9's recipe finalizes.
 
-<!-- Append new decisions below. Next ID: D-041 -->
+## D-041 — Checkpoint archival to R2: strip optimizer state by default, keep full only at named fork points; server→R2 direct, no Mac round-trip  (2026-07-16, phase 5)
+**Decision:** Built `scripts/cloud/archive_checkpoints.py` (runs on the pod, needs torch) +
+`scripts/cloud/push_checkpoints.sh` (Mac-side wrapper: scp the archiver over, run it, `rclone
+copy` the staged output straight from the pod to `r2:${R2_BUCKET}/experiments/`, verify, clean
+up the staging dir — never touches `experiments/` itself). Policy:
+- Every run archives `config.yaml` + `metrics.jsonl` + `notes.md` + `samples/` as-is (KB-scale)
+  plus `ckpt/best.pt` with `optimizer_state_dict(s)` stripped out — model weights only
+  (~39MB/run at S-tier vs ~111MB full). Ablation runs are reproducible from config+seed (the
+  project's own standard), so an archived copy doesn't need to be resumable, just reloadable
+  for eval/generation/inspection.
+- Runs that have had a real `--resume` fork off them are named explicitly (currently just
+  `20260713_p5_s-wave-d-constant`, the WSD multi-budget bonus's shared checkpoint, D-039) and
+  get BOTH `ckpt/best.pt` and `ckpt/latest.pt` archived in full (optimizer state intact) —
+  these need to stay actually resumable.
+- Pushed **server→R2 directly** (rclone already installed+credentialed on the pod per D-026),
+  not via the Mac — avoids a home-bandwidth round-trip for data that's disposable at the Mac end
+  anyway; R2 has zero egress either direction so cost is identical.
+- Nothing is deleted from the pod's data disk by this script (user's explicit call this
+  session, since the 50GB data disk had 37GB free — not under real pressure yet). R2 becomes an
+  additional durable copy, not (yet) a replacement for the pod copy.
+
+**First run (2026-07-16):** archived all 48 existing runs, 1.395 GiB (348 objects) pushed in
+~110s. R2 bucket `llm` total is now 4.274 GiB (2.879 GiB tokenized data from D-026/RW-1 +
+1.395 GiB experiments) — comfortably inside the free 10GB tier, nowhere near the user-approved
+50GB ceiling even before accounting for future M/L-tier runs.
+
+**Options considered:** keep last-N checkpoints per run (rejected — CLAUDE.md already settled
+"latest.pt + best.pt only, no milestone hoarding," and the trainer already tracks `best.pt`
+separately from `latest.pt` by val_loss, so "the last checkpoint isn't the best one" is already
+handled in code, not a gap R2 needed to solve); archive full checkpoints for every run (rejected
+— 3x the size for zero benefit on runs nobody will ever resume; R2 free-tier math would still
+work but wastes the margin needed for M/L-tier runs later); route through the Mac first
+(rejected — pure overhead, R2 has no egress cost either direction so server→R2 direct is
+strictly better).
+
+**Also found while investigating this (not this decision, but logged for the paper trail):**
+the pod's git working tree is stale (`HEAD` at Wave D's `3d330cc`, several commits behind the
+Mac's `86edd50`) with uncommitted drift in `PROGRESS.md`/`DECISIONS.md`/`registry.csv`/several
+`src/llmlab/model/*.py` files — caused by the trainer writing directly to the pod's
+`registry.csv` (never committed there) while the Mac's copy was separately polished and
+committed. Confirmed this is **not** a checkpoint-safety issue (`experiments/**/ckpt/` and
+`wandb/` are gitignored and untracked on both machines — `git pull` cannot touch them under any
+circumstance) but a plain `git pull` on the pod would likely refuse to run until that drift is
+discarded (`git checkout -- .` on the pod, Mac's versions are authoritative). Not fixed this
+session — flagged for whoever next needs to `git pull` on this pod.
+
+**Revisit if:** the pod's data disk actually fills up (currently 37GB free of 50GB) — switch
+the "keep on pod too" default to "delete after verified push"; or if a future run needs to be a
+fork point after the fact — add its run_id to `push_checkpoints.sh`'s `FORK_POINTS` arg and
+re-run (rclone only pushes the newly-full checkpoint, cheap).
+

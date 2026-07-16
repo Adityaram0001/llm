@@ -10,7 +10,29 @@ E done (D-040)**. **Waves A-D done = the M2 milestone is DECLARED** (Wave E isn'
 exit criteria but is now done too). Wave F (DeepSeek specials: MoE aux-loss vs aux-loss-free,
 MTP) is next — the flagship-3 wave, needs new model code (routing, MTP head).
 
-**This session (2026-07-13, Wave E):** implemented the efficiency/memory knobs Wave E needed
+**This session (2026-07-16, checkpoint archival to R2):** user flagged that 40 of 48 runs'
+checkpoints existed ONLY on the gpuhub pod's data disk (7.2GB, growing every wave, never backed
+up) — built `scripts/cloud/archive_checkpoints.py` + `scripts/cloud/push_checkpoints.sh`
+(D-041): strips optimizer state from `ckpt/best.pt` before archiving (model weights only, ~39MB
+vs ~111MB full — ablation runs are reproducible from config+seed, not meant to be resumed),
+except named fork-point runs (currently just `wave_d_constant`, which two Wave D WSD runs
+really `--resume`d from) which archive full+resumable. Pushed **server→R2 directly**, no Mac
+round-trip. First run archived all 48 runs, 1.395 GiB in ~110s; R2 bucket `llm` now totals
+4.274 GiB (2.879 GiB data + 1.395 GiB experiments) — comfortably inside the free 10GB tier, well
+under the user-approved 50GB ceiling. Nothing deleted from the pod (user's call — data disk has
+37GB free, not under pressure yet); re-run `push_checkpoints.sh` any time, it only pushes
+new/changed files. Also answered two side questions: **git pull cannot delete checkpoints or
+wandb logs** (both gitignored/untracked on every machine, git only touches tracked files) — but
+found the pod's git tree is stale (HEAD at Wave D's `3d330cc`, uncommitted drift in
+`registry.csv`/`PROGRESS.md`/model files from the trainer's own local writes) and will likely
+refuse a plain `git pull` until that drift is discarded, not fixed this session, flagged in
+D-041. **wandb comparison across runs has never been set up** (project has run offline-only per
+D-009 since the start) — phase 6 does NOT cover this (it's the eval-metrics suite, not a
+training-curve dashboard); `notebooks/05_compare_runs.ipynb` already does cross-run comparison
+locally without it. Left as optional/not-blocking. **GPU still up in no-GPU/cheap mode
+(singapore-b:25864, $0.10/hr) — user stops it when done, not part of this session's scope.**
+
+**Earlier (2026-07-13, Wave E):** implemented the efficiency/memory knobs Wave E needed
 (none existed before): `precision` (bf16/fp32) and `gradient_checkpointing` on `TrainConfig`/
 `Trainer`/`GPT` (checkpointing wraps each block in `torch.utils.checkpoint.checkpoint`, gated on
 training + no KV cache), `compile` (`torch.compile(model)`, guarded try/except; checkpointing
