@@ -49,7 +49,7 @@ def main() -> None:
     # wipe out the other categories' entries from a prior full run.
     manifest_entries: list[dict] = []
     if args.skip_books:
-        manifest_entries.extend(e for e in existing if e["type"] == "book")
+        manifest_entries.extend(e for e in existing if e["type"] in ("book", "domain_book"))
     if args.skip_dictionary:
         manifest_entries.extend(e for e in existing if e["type"] == "dictionary")
     if args.skip_supplement:

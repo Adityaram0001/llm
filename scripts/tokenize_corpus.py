@@ -45,6 +45,11 @@ def gather_split_files(clean_dir: Path, split: str) -> list[Path]:
     return books + ([dictionary] if dictionary.exists() else [])
 
 
+def gather_domain_book_files(clean_dir: Path, split: str) -> list[Path]:
+    base = clean_dir if split == "train" else clean_dir / "val"
+    return sorted((base / "domain_books").glob("*.txt"))
+
+
 def encode_split(tokenizer: Tokenizer, files: list[Path], eot_id: int) -> tuple[np.ndarray, list[int]]:
     """Encode each file as its own document, joined by an end-of-text token.
 
@@ -150,6 +155,20 @@ def main() -> None:
         default=[],
         help="additionally tokenize a supplement source (RW-1); repeatable",
     )
+    parser.add_argument(
+        "--domain-books",
+        action="store_true",
+        help="additionally tokenize data/clean/{domain_books,val/domain_books} (RW-4) into "
+        "domain_books.bin / domain_books_val.bin, one file = one document, same convention "
+        "as the main corpus",
+    )
+    parser.add_argument(
+        "--books-only",
+        action="store_true",
+        help="additionally tokenize data/clean/{books,val/books} WITHOUT the dictionary into "
+        "books_only.bin / books_only_val.bin -- Wave G's multi-epoch overfitting lab wants a "
+        "books-only pool of known size to control epoch count precisely",
+    )
     args = parser.parse_args()
 
     tokenizer = Tokenizer.from_file(str(args.tokenizer_dir / "tokenizer.json"))
@@ -184,6 +203,49 @@ def main() -> None:
             }
             print(f"  {len(ids):,} tokens -> {out_path}")
         verify(tokenizer, out_dir / "train.bin")
+
+    if args.books_only:
+        meta.setdefault("books_only", {})
+        for split in ["train", "val"]:
+            base = CLEAN_DIR if split == "train" else CLEAN_DIR / "val"
+            files = sorted((base / "books").glob("*.txt"))
+            print(f"=== books_only {split}: {len(files)} files ===")
+            ids, doc_starts = encode_split(tokenizer, files, eot_id)
+            suffix = "" if split == "train" else "_val"
+            out_path = out_dir / f"books_only{suffix}.bin"
+            docstarts_path = out_dir / f"books_only{suffix}_docstarts.npy"
+            ids.tofile(out_path)
+            np.save(docstarts_path, np.array(doc_starts, dtype=np.int64))
+            meta["books_only"][split] = {
+                "n_tokens": int(len(ids)),
+                "n_docs": len(files),
+                "path": str(out_path.relative_to(ROOT)),
+                "doc_starts_path": str(docstarts_path.relative_to(ROOT)),
+            }
+            print(f"  {len(ids):,} tokens -> {out_path}")
+        verify(tokenizer, out_dir / "books_only.bin")
+
+    if args.domain_books:
+        meta.setdefault("domain_books", {})
+        for split in ["train", "val"]:
+            files = gather_domain_book_files(CLEAN_DIR, split)
+            if not files:
+                raise FileNotFoundError(f"no domain_books files found for split={split}")
+            print(f"=== domain_books {split}: {len(files)} files ===")
+            ids, doc_starts = encode_split(tokenizer, files, eot_id)
+            suffix = "" if split == "train" else "_val"
+            out_path = out_dir / f"domain_books{suffix}.bin"
+            docstarts_path = out_dir / f"domain_books{suffix}_docstarts.npy"
+            ids.tofile(out_path)
+            np.save(docstarts_path, np.array(doc_starts, dtype=np.int64))
+            meta["domain_books"][split] = {
+                "n_tokens": int(len(ids)),
+                "n_docs": len(files),
+                "path": str(out_path.relative_to(ROOT)),
+                "doc_starts_path": str(docstarts_path.relative_to(ROOT)),
+            }
+            print(f"  {len(ids):,} tokens -> {out_path}")
+        verify(tokenizer, out_dir / "domain_books.bin")
 
     for name in args.supplement:
         in_path = SUPPLEMENT_SOURCES[name]

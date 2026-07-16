@@ -672,6 +672,448 @@ books:
   gutenberg_id: 45109
   url: https://www.gutenberg.org/cache/epub/45109/pg45109.txt
   split: val
+# --- RW-4 domain corpus (finance/self-help/wisdom-practical), added for Wave G's
+# domain-mix ablation (D-045). Curated 2026-07-16 from local Gutenberg catalog category
+# data (finance/investing/economics/business + self-help/personal-development practical
+# genre) -- deliberately a different register from the academic-philosophy books above,
+# so it can be mixed into training at an explicit weight (MixedSourceLoader) rather than
+# silently diluting the general corpus. `domain: true` routes these to data/clean/domain_books/
+# instead of data/clean/books/ (see acquire.build_books).
+- slug: ricardo-on-the-principles-of-political-economy-and-taxa
+  title: On The Principles of Political Economy, and Taxation
+  author: Ricardo, David
+  gutenberg_id: 33310
+  url: https://www.gutenberg.org/cache/epub/33310/pg33310.txt
+  split: train
+  domain: true
+- slug: bagehot-lombard-street-a-description-of-the-money-marke
+  title: 'Lombard Street: A Description of the Money Market'
+  author: Bagehot, Walter
+  gutenberg_id: 4359
+  url: https://www.gutenberg.org/cache/epub/4359/pg4359.txt
+  split: train
+  domain: true
+- slug: mill-principles-of-political-economy-abridged
+  title: Principles of Political Economy (Abridged)
+  author: Mill, John Stuart
+  gutenberg_id: 30107
+  url: https://www.gutenberg.org/cache/epub/30107/pg30107.txt
+  split: train
+  domain: true
+- slug: mill-essays-on-some-unsettled-questions-of-political-ec
+  title: Essays on Some Unsettled Questions of Political Economy
+  author: Mill, John Stuart
+  gutenberg_id: 12004
+  url: https://www.gutenberg.org/cache/epub/12004/pg12004.txt
+  split: train
+  domain: true
+- slug: bastiat-essays-on-political-economy
+  title: Essays on Political Economy
+  author: Bastiat, Frédéric
+  gutenberg_id: 15962
+  url: https://www.gutenberg.org/cache/epub/15962/pg15962.txt
+  split: train
+  domain: true
+- slug: bastiat-economic-sophisms
+  title: Economic Sophisms
+  author: Bastiat, Frédéric
+  gutenberg_id: 44145
+  url: https://www.gutenberg.org/cache/epub/44145/pg44145.txt
+  split: train
+  domain: true
+- slug: bastiat-the-law
+  title: The Law
+  author: Bastiat, Frédéric
+  gutenberg_id: 44800
+  url: https://www.gutenberg.org/cache/epub/44800/pg44800.txt
+  split: train
+  domain: true
+- slug: bastiat-harmonies-of-political-economy
+  title: Harmonies of Political Economy
+  author: Bastiat, Frédéric
+  gutenberg_id: 45002
+  url: https://www.gutenberg.org/cache/epub/45002/pg45002.txt
+  split: train
+  domain: true
+- slug: veblen-the-place-of-science-in-modern-civilisation-and
+  title: The Place of Science in Modern Civilisation, and Other Essays
+  author: Veblen, Thorstein
+  gutenberg_id: 39949
+  url: https://www.gutenberg.org/cache/epub/39949/pg39949.txt
+  split: train
+  domain: true
+- slug: keynes-a-tract-on-monetary-reform
+  title: A Tract on Monetary Reform
+  author: Keynes, John Maynard
+  gutenberg_id: 65278
+  url: https://www.gutenberg.org/cache/epub/65278/pg65278.txt
+  split: train
+  domain: true
+- slug: keynes-indian-currency-and-finance
+  title: Indian Currency and Finance
+  author: Keynes, John Maynard
+  gutenberg_id: 49166
+  url: https://www.gutenberg.org/cache/epub/49166/pg49166.txt
+  split: train
+  domain: true
+- slug: marx-a-contribution-to-the-critique-of-political-econom
+  title: A Contribution to the Critique of Political Economy
+  author: Marx, Karl
+  gutenberg_id: 46423
+  url: https://www.gutenberg.org/cache/epub/46423/pg46423.txt
+  split: train
+  domain: true
+- slug: george-progress-and-poverty
+  title: Progress and Poverty
+  author: George, Henry
+  gutenberg_id: 55308
+  url: https://www.gutenberg.org/cache/epub/55308/pg55308.txt
+  split: train
+  domain: true
+- slug: sumner-what-social-classes-owe-to-each-other
+  title: What Social Classes Owe to Each Other
+  author: Sumner, William Graham
+  gutenberg_id: 18603
+  url: https://www.gutenberg.org/cache/epub/18603/pg18603.txt
+  split: train
+  domain: true
+- slug: sumner-the-forgotten-man-and-other-essays
+  title: The Forgotten Man, and Other Essays
+  author: Sumner, William Graham
+  gutenberg_id: 65693
+  url: https://www.gutenberg.org/cache/epub/65693/pg65693.txt
+  split: train
+  domain: true
+- slug: tawney-the-acquisitive-society
+  title: The Acquisitive Society
+  author: Tawney, R. H.
+  gutenberg_id: 33741
+  url: https://www.gutenberg.org/cache/epub/33741/pg33741.txt
+  split: train
+  domain: true
+- slug: hobson-the-evolution-of-modern-capitalism
+  title: The Evolution of Modern Capitalism
+  author: Hobson, J. A.
+  gutenberg_id: 28284
+  url: https://www.gutenberg.org/cache/epub/28284/pg28284.txt
+  split: train
+  domain: true
+- slug: withers-international-finance
+  title: International Finance
+  author: Withers, Hartley
+  gutenberg_id: 11774
+  url: https://www.gutenberg.org/cache/epub/11774/pg11774.txt
+  split: train
+  domain: true
+- slug: withers-war-time-financial-problems
+  title: War-Time Financial Problems
+  author: Withers, Hartley
+  gutenberg_id: 13045
+  url: https://www.gutenberg.org/cache/epub/13045/pg13045.txt
+  split: train
+  domain: true
+- slug: rockefeller-random-reminiscences-of-men-and-events
+  title: Random Reminiscences of Men and Events
+  author: Rockefeller, John D.
+  gutenberg_id: 17090
+  url: https://www.gutenberg.org/cache/epub/17090/pg17090.txt
+  split: train
+  domain: true
+- slug: lefevre-reminiscences-of-a-stock-operator
+  title: Reminiscences of a Stock Operator
+  author: Lefevre, Edwin
+  gutenberg_id: 60979
+  url: https://www.gutenberg.org/cache/epub/60979/pg60979.txt
+  split: train
+  domain: true
+- slug: selden-psychology-of-the-stock-market
+  title: Psychology of the Stock Market
+  author: Selden, G. C.
+  gutenberg_id: 75570
+  url: https://www.gutenberg.org/cache/epub/75570/pg75570.txt
+  split: val
+  domain: true
+- slug: ford-my-life-and-work
+  title: My Life and Work
+  author: Ford, Henry
+  gutenberg_id: 7213
+  url: https://www.gutenberg.org/cache/epub/7213/pg7213.txt
+  split: train
+  domain: true
+- slug: taylor-the-principles-of-scientific-management
+  title: The Principles of Scientific Management
+  author: Taylor, Frederick Winslow
+  gutenberg_id: 6435
+  url: https://www.gutenberg.org/cache/epub/6435/pg6435.txt
+  split: train
+  domain: true
+- slug: taylor-shop-management
+  title: Shop Management
+  author: Taylor, Frederick Winslow
+  gutenberg_id: 6464
+  url: https://www.gutenberg.org/cache/epub/6464/pg6464.txt
+  split: train
+  domain: true
+- slug: gilbreth-the-psychology-of-management
+  title: The Psychology of Management
+  author: Gilbreth, Lillian Moller
+  gutenberg_id: 16256
+  url: https://www.gutenberg.org/cache/epub/16256/pg16256.txt
+  split: train
+  domain: true
+- slug: hendrick-the-age-of-big-business-a-chronicle-of-the-cap
+  title: 'The Age of Big Business: A Chronicle of the Captains of Industry'
+  author: Hendrick, Burton Jesse
+  gutenberg_id: 3037
+  url: https://www.gutenberg.org/cache/epub/3037/pg3037.txt
+  split: train
+  domain: true
+- slug: tarbell-the-history-of-the-standard-oil-company
+  title: The History of the Standard Oil Company
+  author: Tarbell, Ida M.
+  gutenberg_id: 60692
+  url: https://www.gutenberg.org/cache/epub/60692/pg60692.txt
+  split: train
+  domain: true
+- slug: babson-fundamentals-of-prosperity-what-they-are-and-whe
+  title: 'Fundamentals of Prosperity: What They Are and Whence They Come'
+  author: Babson, Roger Ward
+  gutenberg_id: 21502
+  url: https://www.gutenberg.org/cache/epub/21502/pg21502.txt
+  split: train
+  domain: true
+- slug: fetter-the-principles-of-economics-with-applications-to
+  title: The Principles of Economics, with Applications to Practical Problems
+  author: Fetter, Frank A.
+  gutenberg_id: 40077
+  url: https://www.gutenberg.org/cache/epub/40077/pg40077.txt
+  split: train
+  domain: true
+- slug: fetter-economics-volume-ii-modern-economic-problems
+  title: 'Economics Volume II: Modern Economic Problems'
+  author: Fetter, Frank A.
+  gutenberg_id: 12217
+  url: https://www.gutenberg.org/cache/epub/12217/pg12217.txt
+  split: train
+  domain: true
+- slug: smiles-industrial-biography-iron-workers-and-tool-maker
+  title: 'Industrial Biography: Iron Workers and Tool Makers'
+  author: Smiles, Samuel
+  gutenberg_id: 404
+  url: https://www.gutenberg.org/cache/epub/404/pg404.txt
+  split: train
+  domain: true
+- slug: smiles-self-help-with-illustrations-of-conduct-and-pers
+  title: Self Help; with Illustrations of Conduct and Perseverance
+  author: Smiles, Samuel
+  gutenberg_id: 935
+  url: https://www.gutenberg.org/cache/epub/935/pg935.txt
+  split: train
+  domain: true
+- slug: smiles-character
+  title: Character
+  author: Smiles, Samuel
+  gutenberg_id: 2541
+  url: https://www.gutenberg.org/cache/epub/2541/pg2541.txt
+  split: train
+  domain: true
+- slug: smiles-thrift
+  title: Thrift
+  author: Smiles, Samuel
+  gutenberg_id: 14418
+  url: https://www.gutenberg.org/cache/epub/14418/pg14418.txt
+  split: train
+  domain: true
+- slug: allen-as-a-man-thinketh
+  title: As a Man Thinketh
+  author: Allen, James
+  gutenberg_id: 4507
+  url: https://www.gutenberg.org/cache/epub/4507/pg4507.txt
+  split: train
+  domain: true
+- slug: allen-the-way-of-peace
+  title: The Way of Peace
+  author: Allen, James
+  gutenberg_id: 10740
+  url: https://www.gutenberg.org/cache/epub/10740/pg10740.txt
+  split: train
+  domain: true
+- slug: allen-out-from-the-heart
+  title: Out from the Heart
+  author: Allen, James
+  gutenberg_id: 74178
+  url: https://www.gutenberg.org/cache/epub/74178/pg74178.txt
+  split: train
+  domain: true
+- slug: marden-an-iron-will
+  title: An Iron Will
+  author: Marden, Orison Swett
+  gutenberg_id: 13160
+  url: https://www.gutenberg.org/cache/epub/13160/pg13160.txt
+  split: train
+  domain: true
+- slug: marden-how-to-succeed-or-stepping-stones-to-fame-and-fo
+  title: How to Succeed; Or, Stepping-Stones to Fame and Fortune
+  author: Marden, Orison Swett
+  gutenberg_id: 20513
+  url: https://www.gutenberg.org/cache/epub/20513/pg20513.txt
+  split: train
+  domain: true
+- slug: marden-pushing-to-the-front
+  title: Pushing to the Front
+  author: Marden, Orison Swett
+  gutenberg_id: 21291
+  url: https://www.gutenberg.org/cache/epub/21291/pg21291.txt
+  split: val
+  domain: true
+- slug: marden-architects-of-fate-or-steps-to-success-and-power
+  title: Architects of Fate; Or, Steps to Success and Power
+  author: Marden, Orison Swett
+  gutenberg_id: 21622
+  url: https://www.gutenberg.org/cache/epub/21622/pg21622.txt
+  split: train
+  domain: true
+- slug: marden-the-victorious-attitude
+  title: The Victorious Attitude
+  author: Marden, Orison Swett
+  gutenberg_id: 41901
+  url: https://www.gutenberg.org/cache/epub/41901/pg41901.txt
+  split: train
+  domain: true
+- slug: marden-ambition-and-success
+  title: Ambition and Success
+  author: Marden, Orison Swett
+  gutenberg_id: 57651
+  url: https://www.gutenberg.org/cache/epub/57651/pg57651.txt
+  split: train
+  domain: true
+- slug: marden-how-they-succeeded-life-stories-of-successful-me
+  title: 'How They Succeeded: Life Stories of Successful Men Told by Themselves'
+  author: Marden, Orison Swett
+  gutenberg_id: 64059
+  url: https://www.gutenberg.org/cache/epub/64059/pg64059.txt
+  split: train
+  domain: true
+- slug: conwell-acres-of-diamonds
+  title: Acres of Diamonds
+  author: Conwell, Russell H.
+  gutenberg_id: 34258
+  url: https://www.gutenberg.org/cache/epub/34258/pg34258.txt
+  split: train
+  domain: true
+- slug: conwell-what-you-can-do-with-your-will-power
+  title: What You Can Do With Your Will Power
+  author: Conwell, Russell H.
+  gutenberg_id: 33952
+  url: https://www.gutenberg.org/cache/epub/33952/pg33952.txt
+  split: train
+  domain: true
+- slug: conwell-every-man-his-own-university
+  title: Every Man His Own University
+  author: Conwell, Russell H.
+  gutenberg_id: 36955
+  url: https://www.gutenberg.org/cache/epub/36955/pg36955.txt
+  split: train
+  domain: true
+- slug: conwell-the-key-to-success
+  title: The Key to Success
+  author: Conwell, Russell H.
+  gutenberg_id: 37036
+  url: https://www.gutenberg.org/cache/epub/37036/pg37036.txt
+  split: train
+  domain: true
+- slug: barnum-the-art-of-money-getting
+  title: The Art of Money Getting
+  author: Barnum, P. T.
+  gutenberg_id: 8581
+  url: https://www.gutenberg.org/cache/epub/8581/pg8581.txt
+  split: train
+  domain: true
+- slug: hubbard-a-message-to-garcia
+  title: A Message to Garcia
+  author: Hubbard, Elbert
+  gutenberg_id: 17195
+  url: https://www.gutenberg.org/cache/epub/17195/pg17195.txt
+  split: train
+  domain: true
+- slug: hubbard-love-life-work
+  title: Love, Life & Work
+  author: Hubbard, Elbert
+  gutenberg_id: 10417
+  url: https://www.gutenberg.org/cache/epub/10417/pg10417.txt
+  split: train
+  domain: true
+- slug: atkinson-your-mind-and-how-to-use-it-a-manual-of-practi
+  title: 'Your Mind and How to Use It: A Manual of Practical Psychology'
+  author: Atkinson, William Walker
+  gutenberg_id: 42055
+  url: https://www.gutenberg.org/cache/epub/42055/pg42055.txt
+  split: train
+  domain: true
+- slug: trine-what-all-the-world-s-a-seeking
+  title: 'What All The World''s A-Seeking'
+  author: Trine, Ralph Waldo
+  gutenberg_id: 14312
+  url: https://www.gutenberg.org/cache/epub/14312/pg14312.txt
+  split: train
+  domain: true
+- slug: trine-the-higher-powers-of-mind-and-spirit
+  title: The Higher Powers of Mind and Spirit
+  author: Trine, Ralph Waldo
+  gutenberg_id: 28163
+  url: https://www.gutenberg.org/cache/epub/28163/pg28163.txt
+  split: train
+  domain: true
+- slug: wattles-the-science-of-getting-rich
+  title: The Science of Getting Rich
+  author: Wattles, W. D.
+  gutenberg_id: 59844
+  url: https://www.gutenberg.org/cache/epub/59844/pg59844.txt
+  split: train
+  domain: true
+- slug: chesterfield-letters-to-his-son-complete
+  title: Letters to His Son, Complete
+  author: Chesterfield, Philip Dormer Stanhope, Earl of
+  gutenberg_id: 3361
+  url: https://www.gutenberg.org/cache/epub/3361/pg3361.txt
+  split: train
+  domain: true
+- slug: ruskin-unto-this-last-and-other-essays-on-political-eco
+  title: Unto This Last, and Other Essays on Political Economy
+  author: Ruskin, John
+  gutenberg_id: 36541
+  url: https://www.gutenberg.org/cache/epub/36541/pg36541.txt
+  split: val
+  domain: true
+- slug: ruskin-sesame-and-lilies
+  title: Sesame and Lilies
+  author: Ruskin, John
+  gutenberg_id: 1293
+  url: https://www.gutenberg.org/cache/epub/1293/pg1293.txt
+  split: train
+  domain: true
+- slug: washington-character-building
+  title: Character Building
+  author: Washington, Booker T.
+  gutenberg_id: 60484
+  url: https://www.gutenberg.org/cache/epub/60484/pg60484.txt
+  split: train
+  domain: true
+- slug: washington-putting-the-most-into-life
+  title: Putting the Most Into Life
+  author: Washington, Booker T.
+  gutenberg_id: 63620
+  url: https://www.gutenberg.org/cache/epub/63620/pg63620.txt
+  split: train
+  domain: true
+- slug: franklin-franklin-s-way-to-wealth-or-poor-richard-impro
+  title: 'Franklin''s Way to Wealth; or, "Poor Richard Improved"'
+  author: Franklin, Benjamin
+  gutenberg_id: 43855
+  url: https://www.gutenberg.org/cache/epub/43855/pg43855.txt
+  split: train
+  domain: true
+
 dictionary:
   source: gcide
   gcide_version: '0.53'

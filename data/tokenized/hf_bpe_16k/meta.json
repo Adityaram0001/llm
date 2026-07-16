@@ -145,5 +145,33 @@
       "path": "data/tokenized/hf_bpe_16k/supplement_fineweb.bin",
       "doc_starts_path": "data/tokenized/hf_bpe_16k/supplement_fineweb_docstarts.npy"
     }
+  },
+  "domain_books": {
+    "train": {
+      "n_tokens": 6757997,
+      "n_docs": 59,
+      "path": "data/tokenized/hf_bpe_16k/domain_books.bin",
+      "doc_starts_path": "data/tokenized/hf_bpe_16k/domain_books_docstarts.npy"
+    },
+    "val": {
+      "n_tokens": 560851,
+      "n_docs": 3,
+      "path": "data/tokenized/hf_bpe_16k/domain_books_val.bin",
+      "doc_starts_path": "data/tokenized/hf_bpe_16k/domain_books_val_docstarts.npy"
+    }
+  },
+  "books_only": {
+    "train": {
+      "n_tokens": 14141233,
+      "n_docs": 110,
+      "path": "data/tokenized/hf_bpe_16k/books_only.bin",
+      "doc_starts_path": "data/tokenized/hf_bpe_16k/books_only_docstarts.npy"
+    },
+    "val": {
+      "n_tokens": 80644,
+      "n_docs": 2,
+      "path": "data/tokenized/hf_bpe_16k/books_only_val.bin",
+      "doc_starts_path": "data/tokenized/hf_bpe_16k/books_only_val_docstarts.npy"
+    }
   }
 }

@@ -109,15 +109,22 @@ def build_books(
 ) -> list[dict[str, Any]]:
     """Download + clean each book from `configs/corpus.yaml`'s `books` list.
 
+    Books tagged `domain: true` (RW-4's finance/self-help/wisdom set) are routed to a
+    separate `domain_books/` directory rather than the general `books/` one, so
+    `tokenize_corpus.py` can tokenize them into their own `.bin` and the loader can mix
+    them in at an explicit, config-driven weight (Wave G's domain-mix ablation) instead of
+    silently diluting the general corpus.
+
     Returns one manifest entry per book (source url, license, sha256, stats).
     """
-    train_dir = clean_dir / "books"
-    val_dir = clean_dir / "val" / "books"
-    train_dir.mkdir(parents=True, exist_ok=True)
-    val_dir.mkdir(parents=True, exist_ok=True)
+    dirname = lambda is_domain: "domain_books" if is_domain else "books"  # noqa: E731
+    for is_domain in (False, True):
+        (clean_dir / dirname(is_domain)).mkdir(parents=True, exist_ok=True)
+        (clean_dir / "val" / dirname(is_domain)).mkdir(parents=True, exist_ok=True)
 
     entries = []
     for book in tqdm(books, desc="books"):
+        is_domain = book.get("domain", False)
         raw_path = raw_dir / "books" / f"{book['slug']}.txt"
         download_file(book["url"], raw_path, force=force)
 
@@ -126,13 +133,13 @@ def build_books(
         body = strip_gutenberg_boilerplate(raw_text)
         cleaned, clean_stats = clean_text(body)
 
-        out_dir = val_dir if book.get("split") == "val" else train_dir
+        out_dir = clean_dir / ("val" if book.get("split") == "val" else ".") / dirname(is_domain)
         out_path = out_dir / f"{book['slug']}.txt"
         out_path.write_text(cleaned, encoding="utf-8")
 
         entries.append(
             {
-                "type": "book",
+                "type": "domain_book" if is_domain else "book",
                 "slug": book["slug"],
                 "title": book["title"],
                 "author": book["author"],
