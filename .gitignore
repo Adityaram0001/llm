@@ -14,6 +14,10 @@ checkpoints/
 experiments/**/ckpt/
 tools/data_factory/inbox/
 tools/data_factory/outbox/
+tools/data_factory/parsed/
+tools/data_factory/failed/
+tools/data_factory/ledger.csv
+data/sft/
 additionals/
 scripts/cloud/remote.env
 

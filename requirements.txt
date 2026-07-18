@@ -7,8 +7,11 @@ rich>=13.0             # pretty console logging in trainers
 psutil>=5.9            # RAM tracking during training
 
 # Tokenizers & reference models
-tokenizers>=0.20       # HF fast BPE (Part B of phase 2)
-transformers>=4.48     # ONLY for tokenizer/model comparisons, never for our model code
+tokenizers>=0.20,<0.22 # HF fast BPE (Part B of phase 2)
+transformers>=4.48,<5  # ONLY for tokenizer/model comparisons, never for our model code.
+                       # Upper bound added D-048: `pip install mlx-lm` dragged this to 5.x and
+                       # broke import; the frozen eval suite was validated on 4.x. MLX runtime
+                       # (local Gemma) therefore lives in a SEPARATE venv, not this one.
 datasets>=3.0          # optional supplement corpora (TinyStories etc.)
 
 # Tracking & analysis

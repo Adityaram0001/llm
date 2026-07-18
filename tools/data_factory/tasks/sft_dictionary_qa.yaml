@@ -1,0 +1,51 @@
+name: sft_dictionary_qa
+target_count: 3000
+
+# Grounding material: our GCIDE dictionary (word + pos + definition). Each row becomes one
+# instruction/response pair whose answer is grounded in the provided definition.
+seed_source: data/clean/dictionary.jsonl
+seed_kind: dictionary
+seed_term_field: word
+
+seeds_per_prompt: 12        # ~12 items keeps one DeepSeek/Gemma reply well under truncation limits
+
+# Every generated row must validate against this shape.
+schema:
+  instruction: str          # e.g. "What does 'ephemeral' mean?"
+  response: str             # a grounded definition/explanation
+  meta:
+    word: str
+    style: str
+
+# Rotated across batches so the dataset isn't a single register (fights SFT mode collapse).
+style_axes: [formal, casual, kid-friendly]
+
+# A row is a duplicate if the same word appears in the same style.
+dedup_key: meta.word + meta.style
+
+instructions: |
+  For each source dictionary item, write ONE natural instruction/response pair that teaches
+  the meaning of the word. The `instruction` should be a question or request a curious person
+  might actually type (vary the phrasing: "What does X mean?", "Define X", "Explain X like I'm
+  five", "Use X in a sentence", etc.). The `response` must faithfully convey the given
+  definition in your own words — do NOT copy the definition verbatim, and do NOT add facts not
+  supported by it. Always mention the word itself somewhere in the response. Keep responses to
+  1-4 sentences. Set meta.word to the source word.
+
+few_shot:
+  - seed_id: dict-xxxxxxxx
+    instruction: "What does 'ephemeral' mean?"
+    response: "Something ephemeral lasts only a very short time before fading away — like a
+      mayfly that lives for a single day, or a fashion trend that's gone within a season."
+    meta:
+      word: ephemeral
+      style: casual
+
+quality:
+  min_response_chars: 20
+  max_response_chars: 600
+  min_instruction_chars: 5
+  max_instruction_chars: 200
+  require_lang: en
+  forbid_refusals: true
+  require_seed_term_in_response: true

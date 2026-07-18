@@ -3,15 +3,50 @@
 > Every Claude session reads this first and updates it last. Keep it honest and terse.
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
-**Active phase:** Phases 0-5 are **done** (milestones M1/M2 declared). **Phase 6
-(`docs/phases/phase6_evaluation.md`) is now DONE — M3 declared (D-046, this session).** Built
-`src/llmlab/eval/` + `scripts/evaluate.py --suite core` (runs in ~38s, well under the 10min exit
-criterion); the fixed eval battery is now FROZEN per the spec's decision point. Wave G's
-deferred dictionary-ablation item (D-045: "does the dictionary in the mix improve a 'define X'
-eval?") is now **unblocked** — the dictionary probes it needs exist — but the ablation run
-itself hasn't been executed yet; it's a cheap follow-up (single training-data-mix axis, no new
-model code) available whenever picked up, still parked (see parking lot below). **Phase 7 (data
-factory) is next.**
+**Active phase:** Phases 0-6 are **done** (milestones M1/M2/M3 declared). **Phase 7
+(`docs/phases/phase7_data_factory.md`) is now DONE (2026-07-18, D-048/D-049/D-050)** — factory
+built + both backends validated + **3,070 diversified SFT pairs generated & exported** (DeepSeek
+v4-flash non-thinking, ~$0.17 total incl. an archived a-words first run). Exit criteria met.
+**Phase 8 (fine-tuning: SFT/LoRA/DPO) is next** — its
+first input is `data/sft/sft_dictionary_qa/{train,val}.jsonl` (gitignored; push to R2 before any
+cloud run). Wave G's deferred dictionary-ablation item (D-045:
+"does the dictionary in the mix improve a 'define X' eval?") remains unblocked but unrun (parked,
+see parking lot).
+
+**This session (2026-07-18, phase 7 — data factory BUILD):** built the whole backend-agnostic
+generation pipeline in `tools/data_factory/` (`spec/seeds/prompt/backends/validate/ledger/
+factory.py` + `tasks/sft_dictionary_qa.yaml`). Resolved the spec's "optional backends behind one
+interface" decision point with the user up front: **all 4 backends built** — `manual` (DeepSeek
+web, D-004 human transport), `api` (DeepSeek OpenAI-compatible, needs a key), `local` via **both**
+`ollama` (`gemma3n:e4b` default) **and** `mlx` (`mlx-community/gemma-3n-E4B-it-4bit`, lazy
+import). The user added the **local Gemma** option (E2B/E4B/12B on the 16GB M4) on the correct
+insight that our grounded first mission is a reading-comprehension/reformat task where a small
+local model does well; **E4B chosen as the default local size.** No new deps (used `requests`;
+in-house tolerant JSON repair instead of `json-repair`; `mlx-lm` optional/Apple-only). CLI:
+`make-batches | run | ingest | status | export`; `run` is the automated analogue of the manual
+paste loop (fills `inbox/` from `outbox/`) so the SAME paranoid validator serves every backend.
+**3-batch dry run passed** (mock replies with injected fences/smart-quotes/trailing-commas/prose/
+refusal/grounding-fail/duplicate rows): tolerant parse recovered all, bad rows all rejected with
+reasons, re-ingest idempotent (+0), export split clean, ledger consistent. **15 new tests
+(`tests/test_data_factory.py`), full suite 154 passed (was 139).** Dry-run artifacts cleaned up
+(no fake pairs in repo); `parsed/`/`failed/`/`ledger.csv`/`data/sft/` gitignored. Full story +
+the "grounding gate must check the response, not the instruction" bug caught during the dry run:
+D-048.
+
+**Same session, later (2026-07-18, backends stood up + tested for real — D-048 execution
+notes):** user gave a DeepSeek API key ($2 budget) + Gemma go-ahead. **Both backends now live and
+validated:** DeepSeek `api` (36/36 valid, **~$0.35/3k** on the cheap `deepseek-chat` model,
+prefix-caching wired by reordering the prompt invariant-first) and local **Gemma `gemma3n:e4b`
+via Ollama** (quality genuinely good on grounded dictionary Q&A, ~52s/batch, free/unattended).
+**Homebrew is BROKEN on this Mac** (`/opt/homebrew` not writable + too old for macOS 26) — Ollama
+was installed from its direct binary instead (no sudo; `~/Applications/Ollama.app`). **MLX
+deferred to a separate venv:** `pip install mlx-lm` upgraded transformers 4→5 and would have
+broken the frozen eval suite — rolled back, pinned `transformers<5`/`tokenizers<0.22`. Two real
+robustness fixes that only real model output surfaced (mocks missed them): Gemma emits U+2581
+('▁') for indentation → broke JSON parse → normalized in the tolerant parser; and GCIDE sorts
+numerals/abbrevs first → added a default `real_words_only` seed filter. New `tools/data_factory/
+README.md`. Suite **156 pass**. **NEXT: generate ≥2k pairs at scale** — both backends proven,
+just a volume run (user picks backend/count).
 
 **⚠️ Known bug, not yet fixed (RW-6, D-047, found 2026-07-17 in a discussion session):
 `dictionary_probes.py`'s `definition_completion_ppl` is computed on silently corrupted text
@@ -312,7 +347,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 | 4 | Training engine + first pretrain | `docs/phases/phase4_training.md` | done |
 | 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | done |
 | 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | done |
-| 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | todo |
+| 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | done |
 | 8 | Fine-tuning: SFT / LoRA / DPO | `docs/phases/phase8_finetuning.md` | todo |
 | 9 | Capstone: 100M hero run + report | `docs/phases/phase9_capstone.md` | todo |
 
@@ -513,6 +548,38 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
   specific step counts, alongside (never replacing) latest.pt/best.pt. +12 tests
   (`tests/test_eval.py` 11, `tests/test_trainer.py` +1) — 139 total, all pass.
 
+## Phase 7 checklist (in-progress)
+
+- [x] Backend strategy decided with the user (D-048): all 4 backends built —
+  `manual` / `api` (DeepSeek) / `local` via BOTH `ollama` + `mlx` (Gemma, E4B default).
+- [x] `tools/data_factory/` architecture built: `spec.py` (TaskSpec + QualityFilters),
+  `seeds.py` (dictionary rows OR book-passage chunks, id-stamped for idempotency+retry),
+  `prompt.py` (self-contained strict-JSON prompt, style rotated per batch), `backends.py`
+  (4 backends behind `Backend.generate()`), `validate.py` (tolerant parse + schema + quality
+  gates + dedup, every reject keeps a reason), `ledger.py` (CSV audit), `factory.py`
+  (`make-batches | run | ingest | status | export`).
+- [x] First task spec: `tasks/sft_dictionary_qa.yaml` (3000 grounded dictionary Q&A,
+  styles formal/casual/kid-friendly, dedup on word+style).
+- [x] 3-batch dry run end-to-end (mock replies with injected messiness) — parse/validate/dedup/
+  idempotency/export all verified. +tests (`tests/test_data_factory.py`).
+- [x] **Backends stood up + validated on REAL output (D-048 execution notes, 2026-07-18):**
+  DeepSeek `api` (36/36 valid, ~$0.35/3k, cheap model + prefix-caching wired) AND local Gemma
+  `ollama` (`gemma3n:e4b`, quality genuinely good, ~52s/batch). MLX deferred to a separate venv
+  (transformers-5 conflict). Two real fixes surfaced by real output: Gemma's U+2581 meta-space
+  (broke JSON parse — fixed) + a `real_words_only` seed filter (GCIDE sorts numerals/abbrevs
+  first). Full suite **156 pass**.
+- [x] **Generated SFT pairs (D-050, 2026-07-18)** via DeepSeek **deepseek-v4-flash non-thinking**,
+  60 seeds/batch, `run --workers 8` concurrency (~3–4 min/50 batches), ~$0.08/run.
+- [x] **Caught + fixed an alphabetical-skew bug (D-050 addendum):** the first run was 2705/2708
+  **'a'-words** (sorted GCIDE read in file order). Fix: `seeds.select_seeds` deterministic shuffle,
+  now the `make-batches` default (`--no-shuffle` opts out). **Regenerated diversified: 3,070 pairs**
+  spread across the whole alphabet (a:214…s:353…p:276), styles 1002/991/957, 0 dedup collisions.
+  The a-words set is **archived** at `data/sft/sft_dictionary_qa_a-words/` (user asked to keep it).
+- [x] **Exported** the diversified set to `data/sft/sft_dictionary_qa/{train,val}.jsonl`
+  (2916/154, 95/5, seed 1337), gitignored — **push to R2 before any cloud phase-8 SFT run**.
+- [x] **Exit criteria met → PHASE 7 DONE (2026-07-18):** CLI end-to-end ✓, ≥2k pairs ✓ (3070),
+  ledger consistent ✓, PROGRESS/DECISIONS updated ✓.
+
 ## Rework queue (see CLAUDE.md "Change management")
 
 | ID | What | Why | Fix in phase | Status |
@@ -526,6 +593,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 | RW-5 | `GPT.forward()` hard-rejects any sequence longer than `model_config.max_seq_len` (`ValueError`) — blocked (a) phase 5 Wave B's length-extrapolation probe and (b) the phase-9 capstone's chat-usability goal (real, not just extrapolated, 2k+ context). **Part (a) DONE 2026-07-12 (D-037)**: `forward()`'s guard now only applies to `learned`/`sinusoidal` (physically bounded); rope/alibi/none can run past `max_seq_len` at eval time. Probe ran clean: ALiBi improves with length (ppl 32.56→31.67 @512→2048), RoPE degrades gracefully (33.24→45.68), NoPE collapses (40→732) — real data point for part (b)'s decision, arguing ALiBi deserves consideration alongside RoPE. **Part (b) still open**: `model_l.yaml`'s `max_seq_len` (currently 512, same as S/M) should be deliberately reconsidered for the L-tier capstone per the 2026-07-12 discussion (`docs/learnings/20260712_model-config-strategy.md`) — likely ~2048 native, and now also an open question of RoPE vs ALiBi for that tier given D-037's result | Discovered incidentally while GPU-benchmarking seq_len scaling (D-030); RoPE (already the project default, D-016) is one of the position encodings best suited to this, so the fix is well-aligned with existing choices | 5 (done) / 9 (L-tier capstone max_seq_len + pos_encoding decision, still open) | in-progress |
 | RW-6 | `src/llmlab/eval/scoring.py`'s `encode_prompt_continuation` silently assumes the separately-encoded prompt is a token-prefix of the jointly-encoded (prompt+continuation) sequence — false whenever a BPE merge pulls the prompt's trailing character into a token that belongs to the continuation. **Verified exhaustively (2026-07-17, discussion session, D-047): 3,281/3,281 (100%) of `dictionary_probes.py`'s definition-completion examples hit this** (prompt always ends `": "`) — the continuation gets silently corrupted (a real word, e.g. "excessive", dropped entirely), so `definition_completion_ppl` in EVERY `eval_results.json` written so far (baseline + all 3 milestone checkpoints) is computed on mangled text and must not be quoted as-is. Cloze/domain-probes/HellaSwag/LAMBADA-style are all verified NOT affected (different, safe prompt/continuation boundary shape). A second, smaller issue in the same audit: the MC probe doesn't use this helper at all and tokenizes each choice standalone (~10% get a different, out-of-context token count — doesn't corrupt content, just adds noise). **Fix path spelled out in D-047**: split by character offset (`Tokenizer.encode(...).offsets`) instead of by separately-encoded token count. Not fixed yet — discussion sessions change no code | Found while writing the phase-6 learnings note, by checking the helper's own docstring claim against the real tokenizer instead of trusting it | 6 (whenever `src/llmlab/eval/` is next touched) | todo |
 | RW-4 | Domain corpus expansion (finance/self-help/wisdom). **Corpus + ablation DONE 2026-07-16 (D-045)**: 62 PD books curated from local Gutenberg catalog data (finance/investing/economics/business + self-help/personal-development/wisdom-practical categories), `domain`-tagged routing added to `acquire.build_books`/`scripts/tokenize_corpus.py`, `MixedSourceLoader`'s existing per-source weights used unmodified. Domain-mix ablation (0/10/25/50% share) found a strictly monotonic general-val-loss cost — recommend **10-25% share** for the capstone (not the original 10-20% target's upper bound, and well short of 50%). **Eval probes DONE 2026-07-17 (D-046)**: `src/llmlab/eval/domain_probes.py` + 24 hand-written items (`data/eval/domain_probes.json`) — this baseline (0% domain share) scores exactly at chance on them, the expected null result. **Still open:** the Wave G "does dictionary-in-the-mix help a define-X eval" ablation is now unblocked but not yet RUN; growing the 6.76M-token domain pool before L-tier's much bigger token budget is an open question (recipe.md flags it) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 9 (capstone domain-share decision) | in-progress (corpus+ablation+probes done, capstone decision open) |
+| RW-7 | Data-factory generation optimizations, to apply BEFORE the real ≥2k run (D-049): (a) set the Ollama backend's `options.num_ctx` high enough (≥8192) that larger Gemma batches don't **silently truncate** output past ~4096 default ctx → broken JSON → whole-batch failure; (b) give per-backend default `seeds_per_prompt` (Gemma ~20–25, DeepSeek ~50–80) so users needn't remember `--seeds-per-prompt` (the flag already works today); (c) set `DEEPSEEK_MODEL=deepseek-v4-flash` explicitly (the `deepseek-chat` alias deprecates 2026-07-24 but auto-maps, so non-urgent), keeping NON-thinking mode for grounded generation | Throughput benchmark + spec review this session (D-049): Gemma bound by 8k output cap + Ollama's silent num_ctx truncation; DeepSeek cost is output-token-dominated + batch-invariant so batch for wall-clock not money | 7 (before the ≥2k generation run) | **(c)+DeepSeek max_tokens DONE (D-050)**; (a) Ollama num_ctx + (b) per-backend seeds_per_prompt defaults still open — only needed before a large-batch LOCAL Gemma run (the flag works today) |
 
 ## Parking lot (future ideas, deliberately not scheduled)
 
@@ -562,6 +630,21 @@ from the phase-2 tokenizer study (`20260710_p2_tokenizer-*`) are also in the reg
 
 ## Notes for next session
 
+- **Phase 7 factory is BUILT + BOTH backends live/validated (2026-07-18, D-048 + execution
+  notes); the remaining work is GENERATION at scale.** Setup is DONE: DeepSeek key is in `.env`
+  (cheap `deepseek-chat`, ~$0.35/3k, $2 budget), Ollama is installed from its **direct binary**
+  (NOT brew — brew is broken here: `/opt/homebrew` not writable + too old for macOS 26; the
+  binary is `~/Applications/Ollama.app/Contents/Resources/ollama`, symlinked at `~/.local/bin/
+  ollama`) with `gemma3n:e4b` pulled. **To generate the ≥2k pairs:** start the Ollama daemon
+  (`ollama serve &`) if using local, then
+  `python tools/data_factory/factory.py make-batches --task sft_dictionary_qa --n-batches N`,
+  then `run --backend ollama` (free/unattended, ~52s/batch) OR `run --backend api` (fast, cheap,
+  prints cost) OR the manual DeepSeek-web loop; then `ingest` → `status` → `export --split 95/5`
+  → `data/sft/sft_dictionary_qa/{train,val}.jsonl` for phase 8. `--model`/`--temperature`
+  override per run. **MLX needs its own `.venv-mlx`** (transformers-5 conflict — do NOT
+  `pip install mlx-lm` into `.venv`; see `tools/data_factory/README.md`). Reference: the README,
+  `tasks/sft_dictionary_qa.yaml`, and `tests/test_data_factory.py` (validator behavior).
+  A `book_chunks` seed_kind is already supported for book-grounded Q&A (new task YAML, zero code).
 - **Phase 6 is fully done (2026-07-17), M3 declared.** Next session should read `docs/phases/
   phase7_data_factory.md` and start phase 7 (DeepSeek-assisted data factory). Remember
   CLAUDE.md's D-004 rule: never build/run browser automation against DeepSeek's web UI —

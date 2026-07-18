@@ -2045,3 +2045,249 @@ downstream write-ups (this note, D-046, `notebooks/08_eval_deep_dive.ipynb`) tha
 `definition_completion_ppl` numbers as if they were valid; also worth adding an adversarial test
 case (prompt ending in a bare trailing space) to `tests/test_eval.py` alongside the fix, per the
 "test real call sites" lesson above.
+
+## D-048 — Phase 7 (data factory): built the backend-agnostic generation pipeline; chose a multi-backend strategy (manual DeepSeek web + DeepSeek API + local Gemma via Ollama AND MLX), with local Gemma E4B as the default for grounded generation  (2026-07-18, phase 7)
+**Decision:** Built `tools/data_factory/` end-to-end per the phase-7 spec and resolved its
+"optional backends behind one interface" decision point with the user up front (AskUserQuestion).
+The user contributed a key option not in the original spec: the **local Gemma family**
+(E2B/E4B/12B, all runnable on the 16GB M4) as a generation backend, on the correct insight that
+our first mission is **grounded** data (reference text is provided in the prompt → make SFT pairs
+from it), which is a reading-comprehension/reformatting task where a small local model punches
+above its weight — not a closed-book knowledge task where only a frontier model suffices.
+
+**Backend strategy chosen (all built this session):**
+- `manual` — DeepSeek web chat, human is the transport (D-004: no browser automation). Highest
+  quality, free, slow (human loop ~1 min/batch), zero setup.
+- `api` — DeepSeek OpenAI-compatible endpoint (via `requests`, no `openai` dep). Fast + cheap
+  (~$0.05–0.30 per 3k pairs) + unattended. Gated on `DEEPSEEK_API_KEY` in `.env` (not yet set —
+  needs a key + budget approval from the user before use).
+- `local` — Gemma via **both** runtimes (user chose "Both"): **Ollama** (`gemma3n:e4b` default,
+  simple HTTP daemon) and **MLX** (`mlx-community/gemma-3n-E4B-it-4bit`, Apple-native, fastest on
+  M-series, lazily imported so the factory runs without `mlx-lm` installed). Default local size
+  is **E4B** (~3GB 4-bit — the grounded-generation workhorse on 16GB; E2B lighter/faster, 12B
+  better but ~7–8GB and slow). Free, private, unattended, no ToS friction.
+- Diversity bonus of keeping multiple backends: mixing generators dilutes any single model's
+  stylistic fingerprint, complementing the task YAML's `style_axes` against SFT mode collapse.
+
+**Why the model-name caveat:** the user referred to a "Gemma 4" family with E2B/E4B/12B; the
+E2B/E4B "effective-parameter" naming is Gemma 3n and 12B is Gemma 3 as of the Jan-2026 knowledge
+cutoff. Exact Ollama/MLX tags will be pinned at install time (a post-cutoff "Gemma 4" rebrand
+wouldn't change the architecture). The backend model tags are all overridable via `--model`.
+
+**Architecture built (`tools/data_factory/`):** `spec.py` (TaskSpec + QualityFilters from task
+YAML), `seeds.py` (dictionary rows OR book-passage chunks → id-stamped Seeds for idempotency +
+retry), `prompt.py` (one self-contained strict-JSON prompt per batch, style rotated per batch),
+`backends.py` (the 4 backends above behind one `Backend.generate()` interface), `validate.py`
+(the paranoid gate: tolerant JSON extraction — strips fences, smart quotes, trailing commas,
+prose — then hard schema + quality validation + dedup, every reject keeps a reason),
+`ledger.py` (CSV audit trail, one row/batch), `factory.py` (CLI:
+`make-batches | run | ingest | status | export`). First task: `tasks/sft_dictionary_qa.yaml`
+(3000 grounded dictionary Q&A pairs, styles formal/casual/kid-friendly, dedup on word+style).
+The `run` command is the automated analogue of the manual paste loop — it fills `inbox/` from
+`outbox/` via any automated backend, so the SAME downstream validator serves every backend
+(the spec's core requirement).
+
+**Design choices worth noting:** (a) no new dependencies — DeepSeek/Ollama are hit with the
+existing `requests` dep, tolerant JSON repair is implemented in-house rather than adding
+`json-repair`, keeping requirements lean (CLAUDE.md rule); `mlx-lm` is an optional Apple-only
+extra imported lazily. (b) The grounding-term quality gate checks the **response specifically**,
+not instruction+response — the instruction echoes the term by construction, so accepting it
+there would make the gate meaningless (caught during the dry run when a deliberately-bad row
+slipped through). (c) Batches are idempotent: seeds carry content-hash ids, re-ingesting a reply
+is a no-op (dedup catches it), and `make-batches` auto-includes any not-yet-parsed seeds
+(failed/never-tried) as retries.
+
+**Verified (3-batch dry run, mock replies with injected messiness):** tolerant parse recovered
+JSON from fenced/smart-quoted/trailing-comma/prose-wrapped text; refusal + grounding-fail +
+duplicate rows all correctly rejected with reasons to `failed/`; re-ingest idempotent (+0);
+force-reingest correctly rejected all as duplicates; export produced a seeded train/val split;
+ledger consistent. **15 new tests** (`tests/test_data_factory.py`), full suite **154 passed**
+(was 139). Dry-run artifacts cleaned up afterward (no fake pairs left in the repo);
+`parsed/`, `failed/`, `ledger.csv`, `data/sft/` added to `.gitignore`.
+
+**Still open (the ongoing-generation half of the exit criteria, ≥2k validated pairs):** requires
+actually running a backend at scale — either the user's manual DeepSeek loop, enabling the `api`
+backend (needs a key), or installing a local runtime (Ollama `brew install` + `ollama pull
+gemma3n:e4b` ≈3GB, or `pip install mlx-lm` + MLX weights). Not done this session because it's a
+>2GB pull / external-key step that needs the user's go-ahead (CLAUDE.md). The build + dry run
+(the "1 session to build" deliverable) is complete; generation is the "ongoing batches" phase.
+
+**Revisit if:** a second mission needs a different schema (phase-8 DPO preference pairs:
+`chosen`/`rejected` — same pipeline, new task YAML, per the spec) or if book-grounded Q&A is
+wanted (task YAML with `seed_kind: book_chunks`, already supported by `seeds.py`).
+
+### D-048 execution notes (2026-07-18, later same session — backends actually stood up + tested)
+
+The user supplied a DeepSeek API key (saved to `.env`, gitignored; documented empty in
+`.env.example`) with a **$2 budget** and asked to use the cheaper model + caching. Both local
+and API backends were then stood up and validated for real:
+
+- **DeepSeek `api` — validated.** 36-item smoke run, **36/36 valid, $0.0042 total → ~$0.35 per
+  3000 pairs** (well inside $2). Model: `deepseek-chat` (the cheap one; `deepseek-reasoner` avoided).
+  Added token-usage + cost tracking (`DeepSeekAPIBackend.last_usage`/`.totals`, printed by
+  `run`). **Caching:** DeepSeek's prefix cache is automatic server-side; to exploit it the prompt
+  was **reordered invariant-prefix-first** (`prompt.py`) — task instructions + schema + few-shot
+  (byte-identical across batches) now form a contiguous prefix, with the per-batch style + seed
+  items moved to the end. Cache hits appeared by batch 3 of the smoke run and rise with batch
+  count.
+
+- **Local Gemma `ollama` — validated, quality genuinely good.** Confirms the user's grounded-data
+  hypothesis: E4B's output on dictionary Q&A is faithful, well-written, and close to DeepSeek's.
+  ~52s/batch of 12 on the M4 (free, unattended). **Install was non-trivial: Homebrew is BROKEN on
+  this Mac** — `/opt/homebrew` lost write permission AND the installed Homebrew is too old to
+  recognize macOS 26.5.2 (`brew install` aborts). Routed around it: installed Ollama from its
+  **direct macOS binary** (`ollama.com/download/Ollama-darwin.zip` → `~/Applications/Ollama.app`,
+  symlinked into `~/.local/bin`, no sudo). `gemma3n:e4b` pulled (7.5 GB). User should eventually
+  fix brew: `sudo chown -R adityaram /opt/homebrew && brew update`.
+
+- **MLX `mlx` — built but DEFERRED to a separate venv.** `pip install mlx-lm` silently upgraded
+  `transformers` 4.x→5.13 (and tokenizers), which **broke `import` and would have invalidated the
+  frozen phase-6 eval suite** (validated on 4.x). Rolled back, and **pinned `transformers>=4.48,<5`
+  + `tokenizers<0.22`** in `requirements.txt`; re-verified the full suite. The MLX backend stays
+  in the codebase (lazy import, harmless) but must run from an isolated `.venv-mlx` — documented
+  in `tools/data_factory/README.md`.
+
+- **Two real robustness fixes surfaced by real model output (mocks hadn't caught them):**
+  (1) **Gemma emits U+2581 ('▁', SentencePiece meta-space) for indentation** instead of spaces —
+  not valid JSON whitespace, so it broke `extract_json_array` on 100% of Gemma replies. Fixed by
+  normalizing `▁`→space in the tolerant parser (+regression test). (2) **The sorted GCIDE dump
+  heads with numerals/abbreviations/chemical names** ("1", "1-dodecanol", "1st-class"), which are
+  low-value for a "define this word" dataset and which BOTH models silently rewrote (drifting
+  meta.word off the seed). Added a default `real_words_only` filter to `load_dictionary_seeds`
+  (`_is_real_word`: starts-with-letter, ≥3 chars, mostly-alphabetic) (+test). After the filter,
+  seeds are real words (aardvark, abaca, …) and output quality is clean.
+
+- **Validator earned its keep on real data:** the grounding gate correctly rejected the handful
+  of numeral seeds where a model dropped the digit from its answer (3/36 on one Gemma run) — real
+  rejects with reasons, not silent drops.
+
+New/changed this half: `.env`/`.env.example` (DeepSeek vars), `requirements.txt` (transformers/
+tokenizers upper bounds), `tools/data_factory/{backends,prompt,factory,seeds,validate}.py`
+(usage tracking, prompt reorder, `_load_dotenv`, seed filter, U+2581 fix),
+`tools/data_factory/README.md` (new), `tests/test_data_factory.py` (+2 tests → 156 suite total).
+**Still the same open item:** generate the ≥2k pairs at scale (both backends now proven; it's a
+matter of running `make-batches` + `run` + `ingest` in volume — the user's call on backend/size).
+
+## D-049 — Phase 7 discussion: local-vs-API throughput measured (Gemma ~28 vs DeepSeek ~139 tok/s), batch-sizing optimized per backend, DeepSeek model deprecation (07/24) + non-thinking rationale logged; queued RW-7  (2026-07-18, phase 7, discussion session)
+**Decision:** A Phase-7 discussion session (retrospective + optimization). Per the discussion
+protocol NO code/specs were changed; findings are logged here + RW-7, and captured in
+`docs/learnings/20260718_phase7-data-factory.md`. Three concrete outputs:
+
+**(1) Throughput benchmarked live** (`scratchpad/bench_throughput.py`, 3 runs each, identical
+12-seed prompt): **Gemma E4B via Ollama = ~28 tok/s output** (pure model speed, from Ollama's
+`eval_count`/`eval_duration`), **DeepSeek `deepseek-chat` API = ~139 tok/s effective** (end-to-end
+incl. network). DeepSeek is ~5× faster per token, ~6× faster per call (~8s vs ~50s for 12 items).
+Measured ~96 output tokens/item. Scale-up: 3000 pairs ≈ **~2.9 hr on Gemma (free/unattended)** vs
+**~35 min + ~$0.35 on DeepSeek**. Conclusion: on this M4, local Gemma's value is $0/private/
+no-rate-limits/no-ToS — NOT speed; the grounded output quality is genuinely close to DeepSeek's.
+
+**(2) Batch sizing is backend-specific because the binding constraint differs.**
+- **Gemma E4B**: bound by an ~8k output cap AND raw speed. At ~96 tok/item, ~83 items is the
+  theoretical cap, but JSON reliability degrades long and **Ollama's default `num_ctx` (~4096)
+  silently TRUNCATES output past ~30 items → broken JSON → whole-batch validation failure**. So
+  the safe cap at default settings is **~20–25 items/batch**; bigger needs a `num_ctx` bump.
+  Batching barely helps otherwise (28 tok/s output is the wall, batch-invariant).
+- **DeepSeek V4-flash** (1M ctx / 384k output): effectively unbound. Crucial economics: **cost is
+  output-token-dominated ($1.10/M out) and BATCH-INVARIANT** (3000 items ≈ 288k out tok ≈ $0.32
+  regardless of batching) — batching saves WALL-CLOCK (round-trips) and nothing on cost; prefix
+  caching saves input, the cheap side. Against giant batches: retry granularity + coherence drift.
+  Use **~50–80 items/batch** (cuts 250 calls → ~40).
+- **Usable today with zero code**: the existing `--seeds-per-prompt` flag
+  (`make-batches --seeds-per-prompt 20|60`).
+
+**(3) DeepSeek model deprecation + non-thinking rationale.** `deepseek-chat`/`deepseek-reasoner`
+are deprecated 2026-07-24 15:59 UTC and auto-map to `deepseek-v4-flash` **non-thinking**/
+**thinking** modes respectively (backward-compatible — names still work, nothing breaks). For
+GROUNDED generation we want NON-thinking: reasoning tokens would consume Gemma's 8k output budget
+and DeepSeek's output cost for zero quality gain. `deepseek-chat` (= v4-flash non-thinking) is
+already the configured default — correct. Should set `DEEPSEEK_MODEL=deepseek-v4-flash`
+explicitly (cosmetic, future-proofing).
+
+**Homebrew (asked in the same session):** `/opt/homebrew` is owned by a different account
+(`MobileDev`) and the brew is too old for macOS 26.5.2 → `brew install` aborts. Fixing is SAFE
+for the project (`sudo chown -R adityaram /opt/homebrew` + `brew update`) EXCEPT that the project
+venv's Python IS Homebrew's (`/opt/homebrew/opt/python@3.13`), so a blanket `brew upgrade` (which
+would move that symlink) must NOT be run while the venv depends on it. No passwordless sudo in the
+session, so the chown is the user's to run; not a project blocker either way (Ollama is on a
+direct binary, venv works).
+
+**Impacts:** none retroactive (discussion session). Forward: RW-7 (below) picks up the num_ctx +
+per-backend batch defaults + explicit model name before the real ≥2k generation run.
+**Revisit if:** the real generation run happens (apply RW-7 first), or if a task needs
+thinking-mode output (a genuinely reasoning-dependent dataset — not the grounded SFT mission).
+
+## D-050 — Phase 7 generation run executed: 2,708 validated SFT pairs via DeepSeek V4-flash (non-thinking), 60/batch, concurrent; exit criterion met, phase 7 DONE  (2026-07-18, phase 7)
+**Decision:** Ran the first real data-factory generation at scale (implementing the DeepSeek parts
+of RW-7). User directed: DeepSeek, 60 seeds/batch, concurrent, on **deepseek-v4-flash** at the
+cheaper V4-flash pricing (input miss $0.14/M, output $0.28/M).
+
+**Backend changes made (RW-7, DeepSeek side):**
+- `DEFAULT_DEEPSEEK_MODEL` → `deepseek-v4-flash`; `.env` `DEEPSEEK_MODEL=deepseek-v4-flash`
+  (explicit, future-proof past the 2026-07-24 `deepseek-chat` alias deprecation). Backend resolves
+  model from arg > `DEEPSEEK_MODEL` env > default.
+- **Non-thinking mode enforced explicitly.** A probe revealed **bare `deepseek-v4-flash` defaults
+  to THINKING mode** (empty content, 19 reasoning_tokens) — would burn output budget/cost on
+  reasoning we don't want for grounded reformatting. Verified `{"thinking": {"type": "disabled"}}`
+  yields reasoning_tokens=0; baked it into the request (`thinking: bool = False` init flag). The
+  `deepseek-chat` alias also works (also maps to v4-flash non-thinking) but deprecates 07/24, so
+  the explicit param is preferred.
+- **`max_tokens=8192`** on the request — the DeepSeek analog of Ollama's `num_ctx` truncation
+  trap: without it a 60-item reply (~5–6k output tokens) risked silent truncation → invalid JSON.
+- Pricing constants updated to V4-flash; `_record_usage` made thread-safe (lock) for concurrency.
+- **`run --workers N` concurrency** (`ThreadPoolExecutor`, not multiprocessing — API calls are
+  I/O-bound so threads give real overlap and share the backend's usage totals without pickling;
+  ledger writes stay in the main thread via `as_completed`, no ledger lock needed).
+
+**The run:** 50 batches × 60 seeds (real-words-filtered dictionary) = 3000 seeds. Smoke of 3
+batches (workers=3) first, then remaining 47 at workers=8 (~3–4 min wall-clock; concurrency
+collapsed each ~34s batch-time so 3 concurrent ≈ one batch's wall-time). **Result: 2,708 valid
+pairs** (styles 931 formal / 901 casual / 876 kid-friendly; **0 (word,style) dedup collisions**;
+avg response 105 chars; all three registers distinct and faithful). **Total cost ≈ $0.08** for
+2708 pairs (~$0.03/1000) — trivial against the $2 budget. Cache-hit rate rose across the run
+(retries late in the run hit 99% on the invariant prefix).
+
+**Two recoverable hiccups, both handled:** (1) `b016` hit a transient `ConnectionResetError` mid
+concurrent-run (46 ok / 1 failed) — the per-batch try/except isolated it; regenerated cleanly
+($0.0013, 99% cache). (2) `b026` had one malformed spot mid-JSON (a missing comma the tolerant
+parser can't safely auto-repair — content-preserving auto-repair of arbitrary JSON syntax errors
+is out of scope; better to drop+retry the batch than risk corrupting content) → regenerated after
+clearing its stale ledger `ingested` flag (the idempotency guard had marked it parse_failed).
+
+**Exported:** `data/sft/sft_dictionary_qa/{train,val}.jsonl` (2573 / 135, 95/5, seed 1337) —
+gitignored like all generated data; should be pushed to R2 alongside tokenized data before any
+cloud phase-8 SFT run.
+
+**Exit criteria (phase 7 spec): factory CLI end-to-end on a dry run ✓; ≥2k validated pairs
+exported ✓ (2708); ledger consistent ✓; PROGRESS/DECISIONS updated ✓. PHASE 7 DONE.**
+
+**RW-7 status:** DeepSeek items DONE (explicit v4-flash + max_tokens + non-thinking). Still OPEN
+for a future large-batch LOCAL run: (a) set Ollama `options.num_ctx` so big Gemma batches don't
+truncate, (b) per-backend default `seeds_per_prompt` (Gemma ~20 / DeepSeek ~60) — only the flag
+is wired today. **Revisit if:** a Gemma/Ollama bulk run is done, or phase-8 DPO needs a new task.
+
+### D-050 addendum — alphabetical-skew bug caught + fixed; dataset regenerated diversified (3,070 pairs), a-words archived  (2026-07-18, phase 7)
+**Bug (user-caught):** the D-050 dataset was **2705/2708 'a'-words**. Cause: `load_dictionary_seeds`
+reads the alphabetically-sorted GCIDE dump top-down, and there are 8,562 'a' entries, so the first
+3000 seeds never reached 'b'. A vocabulary SFT set covering only 'a' risks the model overfitting
+that slice instead of the general "define any word" skill — mode collapse on the *vocabulary* axis
+(the seed analog of the style-axis diversity the task already fights).
+
+**Fix:** new `seeds.select_seeds(seeds, exclude_ids, count, shuffle_seed=1337)` — deterministically
+**shuffles the full pool before selecting**, so the sample spans the whole alphabet; reproducible
+via the fixed seed. Wired into `make-batches` as the DEFAULT (`--no-shuffle` + `--seed-limit`
+retain the old file-order behavior for dry runs). +2 tests (`test_select_seeds_*`). Verified: the
+new 3000-seed selection spreads a:214…s:353…p:276…c:260 (≈ proportional to each letter's share of
+the 116,745-word pool), not all-'a'.
+
+**Regenerated:** fresh diversified run (deepseek-v4-flash non-thinking, 60/batch, workers=8) →
+**50/50 batches, 0 failures, 2,950 valid** (98.3% valid — cleaner than the a-run's 90%, the
+numeral-adjacent 'a' entries were the noisy ones), + a 2-batch top-up → **3,070 valid pairs, 0
+dedup collisions**, styles balanced (1002/991/957). Exported 2916/154 (95/5) to
+`data/sft/sft_dictionary_qa/`. Cost $0.085.
+
+**Preserved (user asked not to delete):** the a-words set is archived at
+`data/sft/sft_dictionary_qa_a-words/` (`pairs_all.jsonl` 2708 + train/val + ledger + README) —
+reusable as a focused A-vocabulary set. Both dirs gitignored; push to R2 before cloud phase-8.
+
+**Lesson:** sampling a subset from any sorted corpus in file order silently skews to the front of
+the sort key — shuffle-by-default is the safe posture. Now the factory's default.
