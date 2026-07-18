@@ -1947,3 +1947,101 @@ examples, 200 dictionary entries) ever need a formal noise floor the way D-035 e
 for val_loss — not done this phase, flagged in the eval_deep_dive notebook's own discussion;
 phase 7's data factory, once built, could regenerate/expand the domain probes at higher volume
 without changing the frozen battery's STRUCTURE, only its item count.
+
+
+## D-047 — Discussion session on phase 6 uncovered a real, 100%-reproducing content-corruption bug in `dictionary_probes.py`'s definition-completion metric; NOT fixed this session (discussion sessions change no code)  (2026-07-17, phase 6, discussion session)
+**Decision:** During a discussion session reviewing phase 6's eval suite for the learnings note
+(`docs/learnings/20260717_phase6-eval-suite-deep-dive.md`), verifying `scoring.py`'s
+`encode_prompt_continuation` docstring claim against the real tokenizer (rather than trusting
+it) found a genuine correctness bug, not just an edge case. Per CLAUDE.md's discussion-session
+protocol, **no code was changed this session** — this entry + RW-6 (PROGRESS.md) is the paper
+trail; the fix itself is deferred to whichever future session next touches `src/llmlab/eval/`.
+
+**The bug, precisely:** `encode_prompt_continuation(tokenizer, prompt_text, continuation_text)`
+returns `(tokenizer.encode(prompt_text).ids, tokenizer.encode(prompt_text+continuation_text)
+.ids[len(prompt_ids):])`. This silently assumes the separately-encoded `prompt_ids` is an exact
+PREFIX of the jointly-encoded sequence — true most of the time, but false whenever a BPE merge at
+the boundary pulls the prompt's trailing character into a token that "belongs" mostly to the
+continuation. Concrete example (verified against the real `hf_bpe_16k` tokenizer):
+`encode_prompt_continuation(tok, "avarice (noun): ", "excessive desire for wealth")` returns a
+continuation of `[" desire", " for", " wealth"]` (3 tokens) — **"excessive" is silently dropped
+entirely**, because the joint encoding merges the prompt's trailing space with "excessive" into
+one token (`" excessive"`, id 5632) that occupies a position the separately-encoded 8-token
+prompt (ending in a bare space, id 224) doesn't leave room for. `score_continuation`'s
+`prompt_ids + continuation_ids` therefore feeds the model a corrupted sequence that decodes to
+`"avarice (noun):  desire for wealth"` (double space, missing word) — not a cosmetic issue, a
+real content-loss bug.
+
+**Severity, measured exhaustively, not estimated:** every one of `dictionary_probes.py`'s
+definition-completion examples hits this — **3,281/3,281 (100%) of `dictionary.jsonl`'s val
+entries** trigger it, because the prompt template always ends in `": "` (colon+space) and
+virtually every English definition's first word has a corresponding `" word"` merged token in a
+16k-vocab BPE trained on English text. **`definition_completion_ppl` (all three checkpoints in
+`experiments/20260717_p6_s-p6-baseline-milestones/eval_results_step_*.json`, plus
+`experiments/20260711_p4_s-baseline/eval_results.json`, plus every number and plot derived from
+it in `notebooks/08_eval_deep_dive.ipynb`) is computed on systematically corrupted text and
+should not be quoted as a real perplexity number until fixed.**
+
+**What is NOT affected, also verified exhaustively/at scale rather than assumed:**
+- `dictionary_probes.py`'s **cloze** probe: 0/3,281 (0%) — its prompt ends in `":"` with no bare
+  trailing space, and its continuation supplies its own explicit leading space (`f" {word}"`) —
+  structurally immune to this exact failure mode.
+- `domain_probes.py`: 0/96 choice-checks — same safe pattern (prompt ends in a word/punctuation,
+  continuation carries `" " + choice`).
+- `benchmarks.run_hellaswag`: 0/2,000 spot-checked endings (500 real validation rows × 4 endings)
+  — same safe pattern.
+- `benchmarks.run_lambada_style`: same safe pattern by construction (prompt is
+  `" ".join(words[:-1])`, no trailing space; continuation is `" " + words[-1]`); not swept
+  exhaustively but structurally identical to the two verified-safe cases above.
+- `perplexity.py` (corpus-level books/dictionary ppl+bpb): entirely unaffected — it never
+  constructs a prompt/continuation split at all, it scores whole `.bin` files directly.
+
+**A second, smaller, DIFFERENT issue found in the same audit:** `dictionary_probes.py`'s
+**multiple-choice** probe (part b) doesn't call `encode_prompt_continuation` at all — it encodes
+the prompt and each of the 4 choice texts independently
+(`tokenizer.encode(choices_text[i]).ids`). This does NOT corrupt content (the decoded text is
+correct — verified: `"avarice (noun): excessive desire for wealth"` round-trips exactly), but it
+does tokenize each choice as if it were a sentence-initial standalone string, which differs from
+how the model actually saw that word sequence in training (mid-sentence, following a space) —
+**51/500 (~10.2%)** of a spot-check sample get a different token count under this convention vs
+the correct in-context one (e.g. "excessive" alone tokenizes as `"excess"+"ive"` (2 tokens)
+instead of the in-context `" excessive"` (1 token)). This makes `mc_accuracy` noisier/less
+faithful than it should be, but does not invalidate it the way the content-loss bug invalidates
+`definition_completion_ppl` — the MC probe's own conclusion this session ("not distinguishable
+from chance at n=200, see the CI math in the learnings note") is unaffected by this and, if
+anything, made MORE plausible by an extra source of noise in the choice encoding.
+
+**Why this wasn't caught during the implementation session (D-046):** `tests/test_eval.py`'s
+`test_encode_prompt_continuation_splits_at_the_boundary` only checks ONE example
+(`"The cat sat on the"` + `" mat."`) where the continuation already has its own leading space —
+exactly the SAFE pattern, never the trailing-space-on-prompt pattern that's actually used in
+`dictionary_probes.py`'s definition-completion probe. The unit test's example was chosen for
+convenience, not adversarially against the function's own real call sites — a reusable lesson:
+a helper's test should cover the boundary conditions its REAL CALLERS actually produce, not just
+a convenient illustrative example.
+
+**Recommended fix path (not implemented — for whoever picks up RW-6):** stop assuming the
+prefix property. `Tokenizer.encode(text)` exposes `.offsets` (verified: per-token
+`(start_char, end_char)` spans against the ORIGINAL string). Encode `prompt_text +
+continuation_text` once, then split by character position — every token whose `end_offset <=
+len(prompt_text)` is "prompt", every token whose `end_offset > len(prompt_text)` is
+"continuation" (this correctly assigns a boundary-straddling merged token like `" excessive"`
+entirely to the continuation, matching how `generate()`/`greedy_continuation` already produce
+such tokens). No second `tokenizer.encode(prompt_text)` call needed at all — verified this
+approach reconstructs the exact correct split on the `"avarice (noun): "` example.
+
+**Options considered:** fixing it immediately in this session (rejected — CLAUDE.md's discussion-
+session protocol is explicit: "change no code and no specs," and the fix path is well-understood
+enough that a future implementation session can apply it directly from this entry without
+re-deriving anything); leaving `definition_completion_ppl` in the notebook/eval_results.json
+unflagged since the OTHER four probes' conclusions survive (rejected — a silently-wrong number
+sitting in a "frozen, trustworthy" battery is exactly the kind of thing this project's own
+`docs/EXPERIMENTS.md` noise-floor discipline exists to prevent; better to flag loudly now than
+have a future session quote 101.28 as real).
+
+**Revisit if:** RW-6 gets picked up — re-run `scripts/evaluate.py` on every checkpoint that has an
+`eval_results.json` (currently 4: the phase-4 baseline + 3 milestone snapshots) and correct any
+downstream write-ups (this note, D-046, `notebooks/08_eval_deep_dive.ipynb`) that quote the old
+`definition_completion_ppl` numbers as if they were valid; also worth adding an adversarial test
+case (prompt ending in a bare trailing space) to `tests/test_eval.py` alongside the fix, per the
+"test real call sites" lesson above.
