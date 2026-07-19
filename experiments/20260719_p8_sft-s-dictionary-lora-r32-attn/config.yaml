@@ -1,0 +1,43 @@
+seed: 1337
+model_config: configs/model_s.yaml
+tokenizer_dir: data/tokenized/tokenizers/hf_bpe_16k
+base_checkpoint: experiments/20260711_p4_s-baseline/ckpt/best.pt
+train_file: data/sft/sft_dictionary_qa/train.jsonl
+val_file: data/sft/sft_dictionary_qa/val.jsonl
+pretrain_val_bin: data/tokenized/hf_bpe_16k/val.bin
+pretrain_val_seq_len: 512
+pretrain_val_batches: 16
+pretrain_val_batch_size: 16
+max_len: 128
+epochs: 3
+batch_size: 32
+supervise_eot: true
+lr: 0.0005
+lr_min_ratio: 0.1
+warmup_ratio: 0.03
+weight_decay: 0.0
+betas:
+- 0.9
+- 0.95
+grad_clip: 1.0
+eval_every: 25
+sample_every: 25
+sample_prompts:
+- What does ephemeral mean?
+- Define 'philosophy'.
+- What is a 'go-between'?
+lora:
+  r: 32
+  alpha: 16.0
+  dropout: 0.0
+  targets: attn
+device: null
+precision: bf16
+logging:
+  log_every: 10
+  wandb_project: llm-lab
+  wandb_mode: offline
+phase: 8
+tier: S
+baseline_run: 20260719_p8_sft-s-dictionary
+variable_changed: LoRA r=32 targets=attn vs full FT

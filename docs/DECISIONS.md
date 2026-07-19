@@ -2349,3 +2349,60 @@ declared** (it lands when the phase is complete). RW-6 was skirted (not fixed) b
 safe eval metrics — it remains open and tagged for whenever `src/llmlab/eval/` is next *modified*.
 **Revisit if:** forgetting needs bounding for the capstone — try mixing pretrain data into the SFT
 stream, fewer epochs, or LoRA (Part B; a frozen base can't drift as far).
+
+## D-052 — Phase 8 Part B (LoRA from scratch): adapters are 13–53× cheaper in optimizer memory and competitive-to-better in quality; placement > rank at this scale  (2026-07-19, phase 8)
+**Decision:** Implemented LoRA (Hu et al. '21) from scratch (no peft) and ran the rank+placement
+sweep the phase spec asks for. New code: `src/llmlab/train/lora.py` (`LoRALinear` = frozen base +
+`(alpha/r)·B A`, `apply_lora`/`merge_lora`/`lora_state_dict`/`load_lora_state`, target presets
+attn / attn+ffn / ffn), `SFTConfig.lora` block, LoRA branch in `SFTTrainer` (freeze base, AdamW
+over adapter params only, **adapter-only checkpoints**), `src/llmlab/train/sft_infer.py`
+(`load_finetuned` reconstructs base+adapter for eval/chat — both scripts refactored onto it),
+`scripts/compare_finetune.py`, 3 configs, `tests/test_lora.py` (+10, full suite **183 pass**).
+
+**Init detail (the teachable bit):** A ~ kaiming-uniform, **B = 0**, so at step 0 the adapter
+output is 0 and the model is bit-identical to the pretrained base — fine-tuning starts from the
+base's behavior, not a random perturbation. Gradients still flow (`dL/dB ∝ A x ≠ 0` since A is
+random), so B moves first, then A. Verified: `apply_lora` leaves the model's output unchanged at
+init (`test_apply_lora_output_matches_base_at_init`), and `merge_lora` reproduces the adapted
+forward exactly (`test_merge_lora_preserves_output`).
+
+**Two real bugs caught by RUNNING (the fp32/cpu unit tests missed both):**
+1. **bf16 autocast dtype clash** — the adapter's raw `x @ lora_A.t()` isn't autocast-covered on
+   MPS, so the bf16 base output collided with fp32 adapter params (`BFloat16 != float`). Fixed by
+   doing the adapter matmuls with `F.linear` (autocast-eligible, casts params like `nn.Linear`);
+   added a bf16-autocast regression test.
+2. **device placement** — `apply_lora` creates adapter params on CPU while the model is on MPS
+   (`weight is on cpu but expected on mps`). Fixed with a `model.to(device)` after wrapping, in both
+   `SFTTrainer` and `load_finetuned`.
+Both only surfaced because CLAUDE.md's "verify on a real run" instinct was followed — the first
+three LoRA launches crashed after `__init__`, leaving adapter-only `latest.pt` but no metrics;
+their 8 stale registry rows (written by `fit()`'s `finally`) were removed by hand so the lab record
+stays honest (same class of cleanup as D-046's spurious-registry-rows fix).
+
+**Result (`docs/results/finetune_report.md` Part B, `finetune_partB.json`):** vs the Part-A full FT
+(9.71M trainable, 116.6 MB AdamW optimizer state, best val 3.828):
+- **Memory is the real win:** LoRA trains 0.18–0.74M params (1.9–7.6%), shrinking optimizer state to
+  **2.2–8.9 MB (13–53×)** and the shippable checkpoint to **0.77–2.98 MB** (vs a ~39 MB dense model
+  / 116.7 MB full best.pt). At 10M params the absolute saving is minor — the same *ratio* at 7B+ is
+  the whole reason LoRA exists (ties to the user's Gemma-12B fine-tuning experience). LoRA's win is
+  **memory, not speed** (forward FLOPs ~unchanged; tok/s 13–16K, attn+ffn slowest at 105 adapted
+  layers vs 60).
+- **Quality competitive-to-better:** LoRA **r8 attn+ffn = 3.777 beat full FT (3.828)**; r32 attn
+  (3.924) edged r8 attn (3.942). **Placement matters more than rank** — adapting the FFN beat 4×-ing
+  the rank. All LoRA variants answered-and-stopped more often (90–95% vs 80%).
+- **Forgetting nuance (honest):** on the *adapted* model LoRA forgot MORE (+24–37% vs +15%), but
+  that's confounded by the deliberately higher LoRA lr (5e-4 vs 2e-5) AND is **fully reversible** —
+  the frozen base is bit-identical to `p4_s_baseline`, so popping the adapter restores ppl 34.9
+  exactly; full FT's drift is permanent. This is the true LoRA forgetting-safety property
+  (reversibility), not lower adapted-model ppl.
+
+**Options considered:** which linears to adapt (attn / attn+ffn / ffn presets — never `lm_head`,
+it's tied to the embedding, D-016); adapter-only vs merged checkpoints (adapter-only — it IS the
+LoRA deliverable and drives the size comparison; `load_finetuned` reconstructs at load time);
+LoRA lr (5e-4, higher than full FT's 2e-5 — standard for low-rank adaptation).
+
+**Impacts:** phase 8 Part A+B done; Part C (DPO) remains → **M4 still not declared**. `scripts/
+compare_finetune.py` + `load_finetuned` are reusable for Part C and the multi-base SFT addendum
+(below). **Revisit if:** an LR-matched full-vs-LoRA forgetting comparison is wanted (flagged
+follow-up), or the capstone (100M) wants LoRA — where the memory ratio finally pays off in absolute
+terms.

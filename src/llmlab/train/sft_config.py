@@ -17,6 +17,16 @@ from .config import LoggingConfig
 
 
 @dataclass
+class LoRAConfig:
+    """Part B: if present on an SFTConfig, the base is frozen and only rank-`r` adapters train."""
+
+    r: int = 8
+    alpha: float = 16.0
+    dropout: float = 0.0
+    targets: str = "attn"  # "attn" | "attn+ffn" | "ffn" (see llmlab.train.lora.TARGET_PRESETS)
+
+
+@dataclass
 class SFTConfig:
     seed: int
     model_config: str  # configs/model_s.yaml — must match the base checkpoint's architecture
@@ -49,6 +59,8 @@ class SFTConfig:
         default_factory=lambda: ["What does ephemeral mean?", "Define 'philosophy'."]
     )
 
+    lora: LoRAConfig | None = None  # None = full fine-tune (Part A); set = LoRA (Part B)
+
     device: str | None = None
     precision: str = "bf16"  # bf16 (autocast) | fp32
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -63,6 +75,8 @@ class SFTConfig:
         self.betas = tuple(self.betas)
         if not isinstance(self.logging, LoggingConfig):
             self.logging = LoggingConfig(**self.logging)
+        if self.lora is not None and not isinstance(self.lora, LoRAConfig):
+            self.lora = LoRAConfig(**self.lora)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "SFTConfig":

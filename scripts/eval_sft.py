@@ -34,6 +34,7 @@ from llmlab.data.chat_format import EOT, encode_prompt
 from llmlab.data.sft_loader import load_jsonl
 from llmlab.eval import dictionary_probes
 from llmlab.model import GPT, ModelConfig
+from llmlab.train.sft_infer import load_finetuned
 from llmlab.utils import get_device
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,7 +87,7 @@ def main() -> None:
     tokenizer = Tokenizer.from_file(str(ROOT / sft_cfg["tokenizer_dir"] / "tokenizer.json"))
 
     base = load_model(model_config, ROOT / sft_cfg["base_checkpoint"], device)
-    sft = load_model(model_config, args.sft_run / "ckpt" / "best.pt", device)
+    sft, _, _ = load_finetuned(args.sft_run, "best.pt", device)  # handles full-FT or LoRA
 
     # 1. instruction-following battery on held-out SFT val instructions
     val_rows = load_jsonl(ROOT / sft_cfg["val_file"])[: args.n_instructions]

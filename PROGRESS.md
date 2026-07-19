@@ -4,11 +4,34 @@
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
 **Active phase:** Phases 0-7 are **done** (milestones M1/M2/M3 declared). **Phase 8
-(`docs/phases/phase8_finetuning.md`, fine-tuning: SFT/LoRA/DPO) is IN PROGRESS — Part A (SFT) is
-DONE (2026-07-19, D-051)**; Parts B (LoRA from scratch) and C (DPO) remain, so **milestone M4 is
-NOT yet declared** (it lands when the whole phase is complete). Wave G's deferred
+(`docs/phases/phase8_finetuning.md`, fine-tuning: SFT/LoRA/DPO) is IN PROGRESS — Parts A (SFT,
+D-051) and B (LoRA from scratch, D-052) are DONE (2026-07-19)**; Part C (DPO) remains, so
+**milestone M4 is NOT yet declared** (it lands when the whole phase is complete). Wave G's deferred
 dictionary-ablation item (D-045: "does the dictionary in the mix improve a 'define X' eval?")
 remains unblocked but unrun (parked, see parking lot).
+
+**This session, Part B (2026-07-19, LoRA from scratch — D-052):** built LoRA end-to-end (no peft):
+`src/llmlab/train/lora.py` (`LoRALinear` = frozen base + `(α/r)·BA`, B=0-init, apply/merge/state,
+attn/attn+ffn/ffn presets), `SFTConfig.lora` + LoRA branch in `SFTTrainer` (adapter-only optimizer
++ checkpoints), `src/llmlab/train/sft_infer.py` `load_finetuned` (reconstructs base+adapter; eval/
+chat refactored onto it), `scripts/compare_finetune.py`, 3 configs, `tests/test_lora.py` (+10,
+suite **183 pass**). Ran the rank+placement sweep (r8/r32 attn, r8 attn+ffn). **Result: LoRA is
+13–53× cheaper in AdamW optimizer memory (116.6MB→2.2–8.9MB) and competitive-to-better in quality —
+r8 attn+ffn (val 3.777) beat the full FT (3.828); placement > rank.** Adapters are 0.77–2.98MB vs
+full FT's 116.7MB ckpt. Two real bugs caught by running (bf16-autocast dtype clash → `F.linear`;
+CPU/MPS device placement → `model.to(device)`) that the fp32/cpu tests missed; 8 stale registry
+rows from the crashed pre-fix launches removed by hand. Report: `docs/results/finetune_report.md`
+Part B. **NEXT: Part C (DPO), then the multi-base SFT addendum (below).**
+
+**Planned addendum (user-requested, after Part C):** SFT-on-many-bases — now that each SFT is
+~2 min, fine-tune several pretrained checkpoints to test **"does better pretrain loss predict a
+better SFT model?"**. All ~55 S-tier checkpoints are already LOCAL (no R2 pull). Cleanest set (same
+`model_s.yaml` arch, training-only differences, so directly comparable + drop-in loadable):
+`p4_s_baseline` (val 3.50), `wave-d-muon` (~3.35, biggest pretrain win), `wave-d-wsd` (~3.38). The
+scaling runs (5/10/25/50M) are a second axis ("does a bigger base SFT better?") but need their own
+model configs. Architecture-changing runs (qk-norm/ALiBi/MLA/MoE) each need their matching config
+to load. Not in the phase-8 spec — a bonus ablation; `scripts/compare_finetune.py` already handles
+the tabulation.
 
 **This session (2026-07-19, phase 8 Part A — SFT):** built the whole from-scratch SFT stack (no
 trl/peft) and ran the project's first supervised fine-tune. New code: `src/llmlab/data/
@@ -612,16 +635,27 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 - [x] +15 tests (`tests/test_sft.py`), full suite **173 pass**.
 - [ ] (deferred nice-to-have) notebook visualizing a masked example + the forgetting curve.
 
-**Part B — LoRA from scratch (todo):** `src/llmlab/train/lora.py` (W + (α/r)·BA, freeze base, A~N/B=0,
-merge-back), redo Part-A SFT with LoRA (r=8/32 sweep, attn-only vs attn+ffn), compare quality /
-trainable params / peak mem / tok/s / ckpt size vs full FT.
+**Part B — LoRA from scratch (DONE 2026-07-19, D-052):**
+- [x] `src/llmlab/train/lora.py`: `LoRALinear` (frozen `W` + `(α/r)·BA`, A~kaiming/**B=0** so init==base),
+  `apply_lora`/`merge_lora`/`lora_state_dict`/`load_lora_state`, target presets (attn/attn+ffn/ffn,
+  never `lm_head` — tied). +10 tests.
+- [x] `SFTConfig.lora` + `SFTTrainer` LoRA branch (freeze base, AdamW over adapters only, **adapter-only
+  checkpoints**, tok/s logging); `src/llmlab/train/sft_infer.py` `load_finetuned` (reconstructs
+  base+adapter; `eval_sft.py`+`chat.py` refactored onto it).
+- [x] Rank+placement sweep: `configs/sft_s_dictionary_lora_{r8_attn,r32_attn,r8_attnffn}.yaml`, 3 runs.
+- [x] `scripts/compare_finetune.py` → the full-FT-vs-LoRA table. **LoRA 13–53× cheaper optimizer
+  memory (116.6→2.2–8.9MB), adapters 0.77–2.98MB vs 116.7MB; quality competitive-to-better (r8
+  attn+ffn 3.777 beat full FT 3.828); placement > rank; stop-rate 90–95% vs 80%.** Forgetting
+  higher on the adapted model (+24–37%) but LR-confounded AND fully reversible (frozen base intact).
+- [x] 2 real bugs caught by running (bf16-autocast dtype → `F.linear`; CPU/MPS device → `.to(device)`);
+  8 stale registry rows from crashed pre-fix launches removed. Report: `docs/results/finetune_report.md`.
 
 **Part C — DPO (todo):** preference pairs via the data factory (chosen vs deliberately-worse
 rejected), `src/llmlab/train/dpo.py` (policy vs frozen ref, β·log-ratio), train from the SFT ckpt,
 track reward margins & KL drift, eval battery again.
 
-**Exit criteria (M4, not yet met):** chat REPL demo ✓ (Part A), before/after table ✓ (Part A),
-LoRA + DPO done, all runs registered, decisions logged. M4 declared when B+C land.
+**Exit criteria (M4, not yet met):** chat REPL demo ✓ (Part A), before/after table ✓ (Parts A+B),
+LoRA ✓ (Part B), DPO done, all runs registered, decisions logged. M4 declared when C lands.
 
 ## Rework queue (see CLAUDE.md "Change management")
 
@@ -640,6 +674,14 @@ LoRA + DPO done, all runs registered, decisions logged. M4 declared when B+C lan
 
 ## Parking lot (future ideas, deliberately not scheduled)
 
+- **Clean LoRA rank sweep** (spawned by the 2026-07-19 discussion session): our r8-vs-r32 sweep held
+  **α=16 fixed**, so the scaling `α/r` differed (2.0 vs 0.5) — not a pure rank comparison. A clean
+  rerun should hold `α/r` constant (α ∝ r). Doesn't change any Part-B conclusion (r8≈r32 was a tie;
+  placement dominated). See `docs/learnings/20260719_phase8-sft-lora-deep-dive.md` §5.
+- **LR-matched full-FT-vs-LoRA forgetting** (same discussion; also flagged in D-052): our LoRA runs
+  used lr 5e-4 vs full FT's 2e-5, so the adapted-model forgetting (+24–37% vs +15%) is LR-confounded.
+  Rerun at a matched LR for a fair comparison. The *reversibility* conclusion (frozen base intact)
+  holds regardless.
 - **v2 scale-up** (after phase 9): 32k vocab + 160–180M params + ~3.2B tokens (1.6× data,
   correct Chinchilla coupling). Do NOT do mid-project: vocab change retokenizes everything and
   breaks ppl comparability with all v1 runs; 32k only pays once the corpus is big/diverse

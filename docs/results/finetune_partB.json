@@ -1,0 +1,58 @@
+[
+  {
+    "run": "20260719_p8_sft-s-dictionary",
+    "mode": "full FT",
+    "lr": 2e-05,
+    "trainable_params": 9713472,
+    "trainable_pct": 100.0,
+    "opt_state_mb": 116.561664,
+    "ckpt_mb": 116.696377,
+    "mean_tok_s": null,
+    "best_val_loss": 3.8282352447509767,
+    "pretrain_ppl_start": 34.93317757070178,
+    "pretrain_ppl_end": 40.09836374391979,
+    "stop_rate": 0.8
+  },
+  {
+    "run": "20260719_p8_sft-s-dictionary-lora-r8-attn",
+    "mode": "LoRA r8 attn",
+    "lr": 0.0005,
+    "trainable_params": 184320,
+    "trainable_pct": 1.8975707141586449,
+    "opt_state_mb": 2.21184,
+    "ckpt_mb": 0.766421,
+    "mean_tok_s": 16335.997641378905,
+    "best_val_loss": 3.9420219898223876,
+    "pretrain_ppl_start": 34.93526085354867,
+    "pretrain_ppl_end": 44.400352856074534,
+    "stop_rate": 0.95
+  },
+  {
+    "run": "20260719_p8_sft-s-dictionary-lora-r32-attn",
+    "mode": "LoRA r32 attn",
+    "lr": 0.0005,
+    "trainable_params": 737280,
+    "trainable_pct": 7.5902828566345795,
+    "opt_state_mb": 8.84736,
+    "ckpt_mb": 2.978261,
+    "mean_tok_s": 16323.974325151376,
+    "best_val_loss": 3.923963260650635,
+    "pretrain_ppl_start": 34.93507761129367,
+    "pretrain_ppl_end": 43.40677621029907,
+    "stop_rate": 0.95
+  },
+  {
+    "run": "20260719_p8_sft-s-dictionary-lora-r8-attnffn",
+    "mode": "LoRA r8 attn+ffn",
+    "lr": 0.0005,
+    "trainable_params": 437760,
+    "trainable_pct": 4.506730446126782,
+    "opt_state_mb": 5.25312,
+    "ckpt_mb": 1.801683,
+    "mean_tok_s": 13302.549457151454,
+    "best_val_loss": 3.7766861438751222,
+    "pretrain_ppl_start": 34.93310053014005,
+    "pretrain_ppl_end": 47.97217377892986,
+    "stop_rate": 0.9
+  }
+]

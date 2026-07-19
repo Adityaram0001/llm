@@ -18,30 +18,16 @@ import sys
 from pathlib import Path
 
 import torch
-import yaml
-from tokenizers import Tokenizer
 
 from llmlab.data.chat_format import EOT, Message, encode_example
-from llmlab.model import GPT, ModelConfig
+from llmlab.model import GPT
+from llmlab.train.sft_infer import load_finetuned
 from llmlab.utils import get_device
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def load(run_dir: Path, ckpt_name: str, device: torch.device) -> tuple[GPT, Tokenizer]:
-    cfg = yaml.safe_load((run_dir / "config.yaml").read_text())
-    tokenizer = Tokenizer.from_file(str(ROOT / cfg["tokenizer_dir"] / "tokenizer.json"))
-    model_cfg = ModelConfig.from_yaml(str(ROOT / cfg["model_config"]))
-    model = GPT(model_cfg).to(device)
-    ckpt = torch.load(run_dir / "ckpt" / ckpt_name, map_location=device)
-    model.load_state_dict(ckpt["model_state_dict"])
-    model.eval()
-    return model, tokenizer
 
 
 @torch.no_grad()
 def respond(
-    model: GPT, tokenizer: Tokenizer, history: list[Message], device: torch.device,
+    model: GPT, tokenizer, history: list[Message], device: torch.device,
     temperature: float, top_k: int, max_new_tokens: int,
 ) -> str:
     ids, _ = encode_example(tokenizer, history, add_generation_prompt=True)
@@ -67,7 +53,7 @@ def main() -> None:
     args = parser.parse_args()
 
     device = get_device()
-    model, tokenizer = load(args.run, args.ckpt, device)
+    model, tokenizer, _ = load_finetuned(args.run, args.ckpt, device)
     print(f"loaded {args.run.name} ({model.num_params() / 1e6:.1f}M params) on {device}. "
           "Ctrl-D or 'quit' to exit.\n")
 

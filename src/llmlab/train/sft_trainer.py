@@ -64,9 +64,32 @@ class SFTTrainer:
         self.model = GPT(model_cfg).to(self.device)
         self._load_base_weights(ROOT / cfg.base_checkpoint)
 
-        self.optimizer = torch.optim.AdamW(
-            build_param_groups(self.model, cfg.weight_decay), lr=cfg.lr, betas=cfg.betas
-        )
+        # Part B: if a LoRA block is present, freeze the base and train rank-r adapters only. Must
+        # run AFTER loading base weights (it wraps the loaded Linears) and BEFORE building the
+        # optimizer (which then sees only the adapter parameters).
+        self.lora_info = None
+        if cfg.lora is not None:
+            from .lora import apply_lora, lora_parameters
+
+            self.lora_info = apply_lora(
+                self.model, cfg.lora.targets, r=cfg.lora.r, alpha=cfg.lora.alpha,
+                dropout=cfg.lora.dropout,
+            )
+            self.model.to(self.device)  # new adapter params are created on CPU -> move to device
+            pct = 100 * self.lora_info.trainable_params / self.lora_info.total_params
+            print(
+                f"LoRA r={cfg.lora.r} targets={cfg.lora.targets}: adapted "
+                f"{self.lora_info.n_adapted} layers, trainable {self.lora_info.trainable_params:,} / "
+                f"{self.lora_info.total_params:,} ({pct:.2f}%)"
+            )
+            self.optimizer = torch.optim.AdamW(
+                lora_parameters(self.model), lr=cfg.lr, betas=cfg.betas, weight_decay=cfg.weight_decay
+            )
+        else:
+            self.optimizer = torch.optim.AdamW(
+                build_param_groups(self.model, cfg.weight_decay), lr=cfg.lr, betas=cfg.betas
+            )
+        self.last_tok_s = 0.0
 
         self.tokenizer = Tokenizer.from_file(str(ROOT / cfg.tokenizer_dir / "tokenizer.json"))
         self.train_ds = SFTDataset.from_jsonl(
@@ -126,15 +149,24 @@ class SFTTrainer:
     # -- checkpointing --------------------------------------------------------
 
     def save_checkpoint(self, path: Path) -> None:
-        torch.save(
-            {
-                "step": self.step,
-                "best_val_loss": self.best_val_loss,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-            },
-            path,
-        )
+        """Full FT saves the whole model (+ optimizer). LoRA saves ONLY the adapter tensors — the
+        tiny artifact that is the actual LoRA deliverable, and the point of the checkpoint-size
+        comparison. A LoRA checkpoint is reconstructed at load time as base weights + adapter (see
+        `load_finetuned`)."""
+        payload = {"step": self.step, "best_val_loss": self.best_val_loss}
+        if self.cfg.lora is not None:
+            from .lora import lora_state_dict
+
+            payload["lora_state_dict"] = lora_state_dict(self.model)
+            payload["lora_config"] = {
+                "r": self.cfg.lora.r, "alpha": self.cfg.lora.alpha,
+                "dropout": self.cfg.lora.dropout, "targets": self.cfg.lora.targets,
+            }
+            payload["base_checkpoint"] = self.cfg.base_checkpoint
+        else:
+            payload["model_state_dict"] = self.model.state_dict()
+            payload["optimizer_state_dict"] = self.optimizer.state_dict()
+        torch.save(payload, path)
 
     # -- eval --------------------------------------------------------
 
@@ -200,6 +232,7 @@ class SFTTrainer:
             "pretrain_val_ppl": math.exp(pretrain_val),
             "forgetting_delta": pretrain_val - self.pretrain_val_loss_0,
             "lr": lr,
+            "tok_s": self.last_tok_s,
             "mem_gb": mem_stats()["rss_mb"] / 1024,
             "elapsed_s": time.time() - self._start_time,
         }
@@ -231,12 +264,16 @@ class SFTTrainer:
                         g["lr"] = lr
                     self.optimizer.zero_grad(set_to_none=True)
 
+                    t0 = time.time()
                     self.model.train()
                     with self._autocast():
                         _, loss = self.model(x, y)
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip)
+                    torch.nn.utils.clip_grad_norm_(
+                        (p for p in self.model.parameters() if p.requires_grad), self.cfg.grad_clip
+                    )
                     self.optimizer.step()
+                    self.last_tok_s = x.numel() / (time.time() - t0)
 
                     train_loss = float(loss.detach())
                     if self.step % self.cfg.eval_every == 0:
