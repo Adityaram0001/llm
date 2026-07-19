@@ -1,8 +1,11 @@
 """Seed loading — the grounding material fed into each prompt.
 
-Two kinds:
+Three kinds:
   - "dictionary": rows of `data/clean/dictionary.jsonl` (word + pos + definitions).
   - "book_chunks": passages chunked out of `data/clean/books/*.txt`.
+  - "sft_pairs": rows of an existing SFT `train.jsonl` (instruction + response) — used by
+    phase 8 Part C to generate deliberately-worse "rejected" responses for DPO, grounded in the
+    already-validated "chosen" response rather than the raw dictionary definition.
 
 Every seed carries a stable `id` so batches are idempotent (re-ingesting a reply is a no-op)
 and so failed seeds can be re-queued into retry batches by id.
@@ -107,6 +110,32 @@ def _chunk_seed(book: str, passage: str) -> Seed:
                 raw={"book": book, "passage": passage})
 
 
+def load_sft_pairs(path: str | Path, limit: int | None = None) -> list[Seed]:
+    """Load an existing SFT `train.jsonl` ({instruction, response, meta.word}) as seeds whose
+    grounding material is the (instruction, GOOD answer) pair itself. The id is derived from
+    (word, instruction) — NOT randomized — so `load_sft_pairs` on the same file always yields the
+    same ids, letting `scripts/build_dpo_pairs.py` re-derive this exact seed list later and join a
+    generated rejected response back to its original chosen response without any sidecar file."""
+    seeds: list[Seed] = []
+    with Path(path).open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            instruction = str(rec.get("instruction", "")).strip()
+            response = str(rec.get("response", "")).strip()
+            word = str((rec.get("meta") or {}).get("word", "")).strip()
+            if not instruction or not response or not word:
+                continue
+            text = f"Instruction: {instruction}\nGood answer (do NOT reuse this — write a WORSE one): {response}"
+            seeds.append(Seed(id=_sid("dpo", f"{word}:{instruction}"), term=word, text=text,
+                              raw={"word": word, "instruction": instruction, "chosen": response}))
+            if limit and len(seeds) >= limit:
+                break
+    return seeds
+
+
 def select_seeds(seeds: list[Seed], exclude_ids: set[str], count: int,
                  shuffle_seed: int | None = 1337) -> list[Seed]:
     """Pick up to `count` seeds not already in `exclude_ids`.
@@ -128,4 +157,8 @@ def load_seeds(seed_kind: str, source: str | Path, limit: int | None = None) -> 
         return load_dictionary_seeds(source, limit=limit)
     if seed_kind == "book_chunks":
         return load_book_chunks(source, limit=limit)
-    raise ValueError(f"Unknown seed_kind {seed_kind!r} (expected 'dictionary' or 'book_chunks')")
+    if seed_kind == "sft_pairs":
+        return load_sft_pairs(source, limit=limit)
+    raise ValueError(
+        f"Unknown seed_kind {seed_kind!r} (expected 'dictionary', 'book_chunks', or 'sft_pairs')"
+    )

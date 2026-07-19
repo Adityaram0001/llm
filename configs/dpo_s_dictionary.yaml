@@ -1,0 +1,44 @@
+# Phase 8 Part C — DPO on top of Part A's full-fine-tune SFT model.
+# Chosen = phase-7 SFT pairs (already validated); rejected = phase-8-Part-C data-factory
+# generation (wrong_fact / verbose / off_format, rotated). Both policy and frozen reference start
+# from the SAME SFT checkpoint (`sft_run`).
+seed: 1337
+model_config: configs/model_s.yaml
+tokenizer_dir: data/tokenized/tokenizers/hf_bpe_16k
+sft_run: experiments/20260719_p8_sft-s-dictionary
+sft_ckpt_name: best.pt
+train_file: data/dpo/dictionary_pairs/train.jsonl
+val_file: data/dpo/dictionary_pairs/val.jsonl
+
+pretrain_val_bin: data/tokenized/hf_bpe_16k/val.bin
+pretrain_val_seq_len: 512
+pretrain_val_batches: 16
+pretrain_val_batch_size: 16
+
+max_len: 640          # rejected token lengths: p50=86 p90=408 p99=524 max=607 (measured on the real set)
+epochs: 1              # DPO drifts fast on a finite pair set -- watch forgetting/KL before adding more
+batch_size: 16
+supervise_eot: true
+
+beta: 0.1               # standard DPO default (see dpo.py docstring)
+
+lr: 5.0e-6              # ~1/4 of SFT's already-low lr -- DPO's failure mode is drift, not underfitting
+lr_min_ratio: 0.1
+warmup_ratio: 0.03
+weight_decay: 0.0
+betas: [0.9, 0.95]
+grad_clip: 1.0
+
+eval_every: 25
+sample_every: 50
+sample_prompts:
+  - "What does ephemeral mean?"
+  - "Define 'philosophy'."
+  - "What is a 'go-between'?"
+
+precision: bf16
+
+phase: 8
+tier: S
+baseline_run: "20260719_p8_sft-s-dictionary"
+variable_changed: "dpo: preference-tune the full-FT SFT model on chosen-vs-rejected dictionary QA"

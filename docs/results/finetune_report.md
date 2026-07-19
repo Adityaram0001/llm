@@ -1,7 +1,7 @@
 # Fine-tuning report (phase 8)
 
-Before/after tables for the phase-8 fine-tuning experiments. Part A (SFT) is complete; Parts B
-(LoRA) and C (DPO) will append their own sections.
+Before/after tables for the phase-8 fine-tuning experiments. Parts A (SFT), B (LoRA), and C (DPO)
+are all complete — see each section below.
 
 ## Part A — SFT (full fine-tune), 2026-07-19
 
@@ -97,3 +97,86 @@ adapter *is* the whole deliverable.
   `configs/sft_s_dictionary_lora_{r8_attn,r32_attn,r8_attnffn}.yaml`, `tests/test_lora.py` (+10)
 - runs: `experiments/20260719_p8_sft-s-dictionary-lora-*` (adapter-only checkpoints)
 - data: `docs/results/finetune_partB.json`; decision: D-052
+
+## Part C — DPO from scratch, 2026-07-19
+
+**Run:** `20260719_p8_dpo-s-dictionary` · policy AND frozen reference both start from Part A's
+full-FT SFT model (`20260719_p8_sft-s-dictionary`) · **data:** `data/dpo/dictionary_pairs`
+(2740 train / 144 val preference triples) — chosen = the phase-7 SFT pairs reused as-is; rejected
+= a new data-factory generation rotating three deliberate failure modes (**wrong_fact / verbose /
+off_format**, DeepSeek v4-flash, $0.20 for 2884 pairs) · lr 5e-6, beta 0.1, batch_size 16,
+max_len 640, bf16 · **stopped early at step 91/172 (53% of 1 epoch)** — see "why" below.
+
+### Why the run was stopped early (not a crash — a deliberate call)
+
+Per-step wall-clock degraded steeply and non-linearly over the run (~4.3s/step early -> ~15-30s/step
+by step ~90), ruled out as a batch-shape artifact (checked directly: the rejected side's padded
+width averages ~460 tokens with no upward trend across the visited steps) — most likely a
+sustained-heavy-MPS-workload effect, since DPO runs **four** forward passes per step (policy x
+{chosen, rejected}, reference x {chosen, rejected}) on long sequences, vs SFT's one short one.
+Meanwhile the training signal had already saturated hard: by step 75's eval, val reward_accuracy
+had risen 79% -> 95.8% and val reward_margin 0.04 -> 8.97 — a very large policy/reference
+divergence for well under half an epoch. Rather than let an increasingly-slow run balloon toward
+"multi-hour" without checking in first (CLAUDE.md's own rule), the run was interrupted with
+SIGINT — `DPOTrainer` catches it cleanly (saves `latest.pt`, writes a real registry row); `best.pt`
+(step 75, the actual checkpoint evaluated below) was unaffected.
+
+### Before / after
+
+| metric | base | SFT (pre-DPO) | DPO | delta (SFT->DPO) |
+|---|---:|---:|---:|---|
+| stop-rate (answers & stops ≤64 tok) | 0.0% | 82.0% | **99.0%** | +17 pts |
+| mean answer length (tokens) | 64.0 | 33.9 | **16.5** | much shorter (see catch, below) |
+| dict MC accuracy (chance = 25%) | 26.5% | 29.5% | 33.0% | +3.5 pts (small, noisy) |
+| dict cloze exact-match | 0.0% | 0.0% | 0.0% | — |
+| **pretrain val ppl** (books+dict, forgetting) | 34.93 | 40.10 (+14.8%) | **44.82 (+28.3% vs base)** | +11.8% further, in 91 steps |
+| reward_accuracy vs frozen SFT ref (val) | — | 0.0%¹ | **95.8%** | the real DPO signal |
+| reward_margin vs frozen SFT ref (val) | — | 0.0000 | **8.9694** | large, real preference shift |
+
+¹ Degenerate: when policy == reference exactly, every log-ratio is 0 and the strict `>` in
+`reward_accuracy` reports 0% by construction — NOT evidence SFT preferred the rejected answers.
+`definition_completion_ppl` remains omitted (RW-6).
+
+### The honest catch: length confound behind the short answers
+
+A **reference-free** check — does a model, on its own, already assign a higher raw summed
+log-prob to chosen over rejected? — says **yes, 95.8% of the time, even for the pre-DPO SFT
+model** (mean gap +623.7 nats, rising to +713.4 after DPO). That is *not* evidence SFT already
+understood the wrong_fact/verbose/off_format distinction: chosen responses average ~59 tokens,
+rejected average ~461 (the verbose failure mode dominates that mean, and some pairs run up to
+~10x longer), and an un-normalized summed log-prob is mechanically larger (less negative) for a
+shorter sequence almost regardless of content — a **length confound**. DPO's actual reward is
+computed relative to the reference on the SAME `y`, so it is length-invariant *by construction*;
+but the training *gradient* has no such protection, and the qualitative samples
+(`experiments/20260719_p8_dpo-s-dictionary/samples/step_000050.txt`) show the effect directly —
+answers got terse and sometimes vague (`"What is a 'go-between'?" -> "A 'wit.'"`), consistent with
+the model partly exploiting "shorter closes the reward gap" alongside genuinely learning to stop
+rambling (the stop-rate win is real and separately explained). **This is a well-documented
+real-world RLHF/DPO failure mode (verbosity/length bias in preference data)** — the honest
+takeaway is that the failure-mode data generation should length-balance the rejected side (or the
+loss should length-normalize) before trusting `reward_margin` as a pure quality signal on a
+longer run.
+
+### What DPO added on top of SFT, honestly
+
+- **Real preference learning happened** — reward_accuracy 0%(degenerate)->95.8%, and the
+  qualitative stop-rate win (82%->99%) is a genuine, length-unconfounded improvement: DPO
+  specifically suppressed the off_format failure mode (rambling instead of answering).
+- **But it came fast and partly via a shortcut** (length), and forgetting compounded quickly
+  (+11.8% pretrain ppl in under half an epoch, on top of SFT's own +14.8%) — exactly the
+  over-optimization risk the phase spec's "track reward margins & KL drift" instruction exists to
+  catch. The notebook derivation's Section 8 predicted this pattern before the run confirmed it.
+- **Not done this session** (flagged for a follow-up run): root-cause the MPS step-time slowdown;
+  length-balance or length-normalize the preference data/loss; re-run to a complete epoch once
+  both are addressed for a cleaner end-of-epoch number.
+
+### Artifacts
+- code: `src/llmlab/data/dpo_loader.py`, `src/llmlab/train/{dpo,dpo_config,dpo_trainer}.py`,
+  `scripts/{dpo,eval_dpo,build_dpo_pairs}.py`, `configs/dpo_s_dictionary.yaml`,
+  `tools/data_factory/{seeds.py (sft_pairs kind), tasks/dpo_dictionary_pairs.yaml}`,
+  `tests/test_dpo.py` (+10, full suite 193 pass)
+- run: `experiments/20260719_p8_dpo-s-dictionary/` (config, metrics.jsonl, samples/,
+  eval_dpo.json, notes.md)
+- derivation: `notebooks/09_dpo_from_scratch.ipynb` (RLHF objective -> closed-form optimal
+  policy -> Bradley-Terry substitution -> the loss, executes cleanly, includes real-run results)
+- decision: D-053

@@ -2406,3 +2406,107 @@ compare_finetune.py` + `load_finetuned` are reusable for Part C and the multi-ba
 (below). **Revisit if:** an LR-matched full-vs-LoRA forgetting comparison is wanted (flagged
 follow-up), or the capstone (100M) wants LoRA — where the memory ratio finally pays off in absolute
 terms.
+
+## D-053 — Phase 8 Part C (DPO from scratch): real preference learning, stopped early on a genuine over-optimization + MPS-slowdown signal, length confound caught before writing a verdict — PHASE 8 DONE, M4 DECLARED  (2026-07-19, phase 8)
+**Decision:** Implemented DPO (Rafailov et al. '23) from scratch (no trl) and ran the phase's
+first preference-tuning experiment, resolving 4 decision points with the user up front
+(AskUserQuestion, all recommended options chosen): (1) source preference pairs by reusing the
+existing 2916 phase-7 SFT pairs as `chosen` and generating ONLY a new `rejected` half (cheaper,
+reuses already-validated data) rather than regenerating both sides; (2) rotate a MIX of three
+deliberate failure modes for rejected (`wrong_fact` / `verbose` / `off_format`) rather than one
+fixed mode; (3) train from Part A's full-FT SFT checkpoint (not Part B's LoRA model), matching
+the spec's literal wording and keeping the A→B→C lineage on one canonical policy/reference pair;
+(4) generate rejected responses for the FULL ~2916-pair set, not a smaller ablation-scale subset.
+
+**New code:**
+- `tools/data_factory/seeds.py` — a THIRD seed kind, `sft_pairs` (`load_sft_pairs`): reads an
+  existing SFT `train.jsonl` and derives a STABLE id from `(word, instruction)` — deterministic,
+  no sidecar file needed, so `scripts/build_dpo_pairs.py` can re-derive the exact same id set
+  later and join a generated `rejected` row back to its original `chosen` response by `seed_id`
+  alone. `tools/data_factory/tasks/dpo_dictionary_pairs.yaml` — new task spec; the "style" axis
+  mechanism (already built for phase-7 register rotation) is reused unmodified to rotate FAILURE
+  MODES instead, zero factory-core code changes needed beyond the new seed kind.
+- `src/llmlab/data/dpo_loader.py` (`DPODataset`) — structurally `SFTDataset` doubled: each
+  preference triple becomes TWO independently masked/padded examples (chosen, rejected) sharing
+  one instruction, padded to their OWN batch-max width (their length distributions differ a lot —
+  see the length-confound finding below).
+- `src/llmlab/train/dpo.py` (`sequence_logprobs`, `dpo_loss`) — the ~20 lines the derivation
+  notebook (below) works out to: `sequence_logprobs` sums token log-probs over exactly the
+  assistant-supervised span (reuses Part A's loss mask); `dpo_loss` computes
+  `-logsigmoid(beta * ((policy_c - ref_c) - (policy_r - ref_r)))` plus reward/margin/accuracy/KL
+  diagnostics. Verified against closed-form expectations in both `tests/test_dpo.py` (+10 tests,
+  full suite **193 pass**) and the notebook (loss == log(2) at zero drift, independent of beta).
+- `src/llmlab/train/{dpo_config,dpo_trainer}.py` (`DPOConfig`, `DPOTrainer`) — shape mirrors
+  `SFTTrainer` (warm start, epoch loop, forgetting probe, registry row) but loads TWO model
+  instances via `sft_infer.load_finetuned` (policy trainable, reference `requires_grad_(False)`
+  + always `torch.no_grad()`), and each step does FOUR forward passes instead of one.
+- `scripts/{dpo,build_dpo_pairs,eval_dpo}.py`, `configs/dpo_s_dictionary.yaml`.
+- `notebooks/09_dpo_from_scratch.ipynb` — derives the loss top-to-bottom from the KL-regularized
+  RLHF objective (closed-form optimal policy for a fixed reward → invert to express reward via
+  the policy → substitute into Bradley-Terry, watch the intractable Z(x) cancel → maximum
+  likelihood = the DPO loss), sanity-checks the real code against that math with toy numbers, then
+  runs a real preference triple through it. Executes cleanly end to end.
+
+**Data generation (execution notes):** DeepSeek v4-flash, 12 seeds/batch, workers=8, same
+backend/pricing as D-050. 243 batches → **2,884 valid rejected pairs** (98.9% of the 2916-seed
+target; the rest failed quality gates — refusals, length outliers, 2 missing fields — same
+tolerant-parse-and-reject machinery as phase 7). One real config fix caught by running: the
+smoke-test batch (`verbose` style) produced 1.6-2.1k-char responses, blowing past the task's
+initial `max_response_chars: 1400` — raised to 2500 after confirming (by reading the raw rejected
+text) the overflow was genuinely-bloated content, not garbage. Total generation cost **$0.20**.
+`scripts/build_dpo_pairs.py` re-derives the `sft_pairs` seed ids and joins → **2884 triples**
+(0 unmatched, 0 identical-to-chosen), split 2740 train / 144 val (95/5, seed 1337) →
+`data/dpo/dictionary_pairs/`.
+
+**Training config note:** `max_len` was set from MEASURED token-length percentiles (not guessed)
+after a CPU smoke test on partial data: chosen p99=68/max=94 tokens, but **rejected p99=524/
+max=607** (the `verbose` failure mode runs far longer than any SFT example) — `max_len: 640`,
+5x SFT's 128, to avoid truncating the very failure mode the task exists to teach against.
+
+**Result — stopped early at step 91/172 (53% of 1 epoch), on purpose:** wall-clock degraded
+steeply and non-linearly (~4.3s/step early → ~15-30s/step by step 90) — checked directly and
+RULED OUT batch-shape as the cause (rejected-side padded width averages ~460 tokens with no
+upward trend across the visited steps); most likely a sustained-heavy-MPS-workload effect from
+DPO's 4 forward-passes/step on long sequences (vs SFT's 1 short one), not root-caused further
+this session (flagged below). Meanwhile the val signal had already saturated hard by step 75
+(reward_accuracy 79%→95.8%, reward_margin 0.04→8.97 — a ~90-nat average policy/reference
+log-ratio gap in under half an epoch). Interrupted cleanly via SIGINT (`DPOTrainer` catches it →
+saves `latest.pt`, writes a real registry row) rather than let an increasingly-slow run balloon
+toward CLAUDE.md's "multi-hour, tell the user first" territory unsupervised.
+
+**A real methodological catch, found before writing any verdict (same discipline as D-044's
+aux-loss bug):** a reference-FREE preference check (does a model, ALONE, already give chosen a
+higher raw summed log-prob than rejected?) showed **95.8% "accuracy" for BOTH the pre-DPO SFT
+model and the post-DPO model** (mean gap +624→+713 nats) — initially looked like "SFT already
+understood preferences," which would be a wrong headline. Root cause: chosen averages ~59 tokens,
+rejected averages ~461 (the `verbose` failure mode dominates that mean, some pairs ~10x longer),
+and an un-normalized summed log-prob is mechanically larger (less negative) for a shorter
+sequence almost regardless of content — a **length confound**, not evidence of preference
+understanding. DPO's own reward IS immune to this by construction (same `y`, same length, on
+both policy and reference) — but the training *gradient* is not, and the answer-length collapse
+under training (mean 33.9→16.5 tokens) plus terse/vague qualitative samples
+(`experiments/20260719_p8_dpo-s-dictionary/samples/step_000050.txt`, e.g. "What is a
+'go-between'?" → "A 'wit.'") show the model partly exploiting "shorter closes the reward gap"
+alongside genuinely learning to stop rambling (stop-rate 82%→99%, a real, length-unconfounded
+win — off_format specifically punishes not-answering, independent of length). This is a
+well-documented real-world RLHF/DPO failure mode (verbosity/length bias in preference data), not
+a bug in this implementation.
+
+**Full before/after table, honest caveats, and the length-confound writeup: `docs/results/
+finetune_report.md` Part C. Run notes: `experiments/20260719_p8_dpo-s-dictionary/notes.md`.**
+
+**Options considered:** regenerate both chosen+rejected vs reuse chosen (reuse — cheaper, already
+validated); single vs mixed rejected failure mode (mixed — richer signal, avoids a narrow lesson);
+full-FT vs LoRA SFT as the DPO base (full-FT — matches the spec, cleaner reference-model math);
+full ~2916 vs a smaller ablation-scale pair count (full — all resolved via AskUserQuestion with
+the user before generation).
+
+**Impacts:** Part C done → **phase 8 is now fully complete. Milestone M4 DECLARED 2026-07-19**
+(chat REPL ✓ Part A, before/after table ✓ Parts A/B/C, LoRA ✓ Part B, DPO ✓ Part C, all runs
+registered, decisions logged). **Revisit if:** a longer/cleaner DPO run is wanted for phase 9 —
+first (a) root-cause the MPS per-step slowdown (bisect: extra reference passes vs sequence length
+vs genuine thermal), (b) length-balance the rejected generation (cap the verbose multiplier
+tighter, e.g. 2-3x chosen instead of the observed ~10x) or length-normalize the loss (`logp/len`,
+a documented DPO variant) before trusting `reward_margin` as a pure quality signal, (c) then
+re-run to a complete epoch for a cleaner end-of-epoch number. None of this blocks phase 9 — DPO's
+mechanics (loss, trainer, eval) are proven correct and reusable as-is on a bigger base model.

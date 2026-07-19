@@ -3,27 +3,53 @@
 > Every Claude session reads this first and updates it last. Keep it honest and terse.
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
-**Active phase:** Phases 0-7 are **done** (milestones M1/M2/M3 declared). **Phase 8
-(`docs/phases/phase8_finetuning.md`, fine-tuning: SFT/LoRA/DPO) is IN PROGRESS — Parts A (SFT,
-D-051) and B (LoRA from scratch, D-052) are DONE (2026-07-19)**; Part C (DPO) remains, so
-**milestone M4 is NOT yet declared** (it lands when the whole phase is complete). Wave G's deferred
-dictionary-ablation item (D-045: "does the dictionary in the mix improve a 'define X' eval?")
-remains unblocked but unrun (parked, see parking lot).
+**Active phase:** Phases 0-8 are **done**. **Milestone M4 DECLARED 2026-07-19** — phase 8
+(`docs/phases/phase8_finetuning.md`, fine-tuning: SFT/LoRA/DPO) is fully complete: Part A (SFT,
+D-051), Part B (LoRA from scratch, D-052), and Part C (DPO from scratch, D-053) all done.
+**Phase 9 (capstone: 100M hero run + report, `docs/phases/phase9_capstone.md`) is next and has
+not been started.** Wave G's deferred dictionary-ablation item (D-045: "does the dictionary in
+the mix improve a 'define X' eval?") remains unblocked but unrun (parked, see parking lot); the
+phase-8 multi-base SFT addendum (below) is also still open, as a bonus (not phase-9-blocking).
 
-**This session, Part B (2026-07-19, LoRA from scratch — D-052):** built LoRA end-to-end (no peft):
-`src/llmlab/train/lora.py` (`LoRALinear` = frozen base + `(α/r)·BA`, B=0-init, apply/merge/state,
-attn/attn+ffn/ffn presets), `SFTConfig.lora` + LoRA branch in `SFTTrainer` (adapter-only optimizer
-+ checkpoints), `src/llmlab/train/sft_infer.py` `load_finetuned` (reconstructs base+adapter; eval/
-chat refactored onto it), `scripts/compare_finetune.py`, 3 configs, `tests/test_lora.py` (+10,
-suite **183 pass**). Ran the rank+placement sweep (r8/r32 attn, r8 attn+ffn). **Result: LoRA is
-13–53× cheaper in AdamW optimizer memory (116.6MB→2.2–8.9MB) and competitive-to-better in quality —
-r8 attn+ffn (val 3.777) beat the full FT (3.828); placement > rank.** Adapters are 0.77–2.98MB vs
-full FT's 116.7MB ckpt. Two real bugs caught by running (bf16-autocast dtype clash → `F.linear`;
-CPU/MPS device placement → `model.to(device)`) that the fp32/cpu tests missed; 8 stale registry
-rows from the crashed pre-fix launches removed by hand. Report: `docs/results/finetune_report.md`
-Part B. **NEXT: Part C (DPO), then the multi-base SFT addendum (below).**
+**This session, Part C (2026-07-19, DPO from scratch — D-053):** built DPO end-to-end (no trl):
+`tools/data_factory/seeds.py` new `sft_pairs` seed kind + `tasks/dpo_dictionary_pairs.yaml` (reuse
+the 2916 existing SFT pairs as `chosen`, generate ONLY `rejected` — rotating wrong_fact/verbose/
+off_format failure modes; DeepSeek v4-flash, $0.20 for 2884 pairs, `scripts/build_dpo_pairs.py`
+joins them), `src/llmlab/data/dpo_loader.py` (`DPODataset`), `src/llmlab/train/dpo.py`
+(`sequence_logprobs`/`dpo_loss`), `src/llmlab/train/{dpo_config,dpo_trainer}.py` (`DPOTrainer`:
+policy + frozen reference, both warm-started from Part A's SFT model), `scripts/{dpo,eval_dpo}.py`,
+`configs/dpo_s_dictionary.yaml`, `notebooks/09_dpo_from_scratch.ipynb` (derives the loss from the
+RLHF objective, executes cleanly), `tests/test_dpo.py` (+10, full suite **193 pass**). **Ran
+`20260719_p8_dpo-s-dictionary` — stopped early at step 91/172 (53% of 1 epoch) on purpose**: a
+real, non-batch-shape-explained MPS per-step slowdown (~4s/step→~15-30s/step) plus an already-
+saturated training signal (val reward_accuracy 79%→95.8%, margin 0.04→8.97 by step 75) meant
+continuing risked an unsupervised multi-hour run for little extra signal — interrupted cleanly via
+SIGINT (`DPOTrainer` catches it, checkpoints, registers). **Result: real preference learning
+(reward_accuracy 95.8%, stop-rate 82%→99%) partly confounded by a caught, honestly-reported length
+bias** — rejected responses (dominated by the `verbose` failure mode) average ~461 tokens vs
+chosen's ~59, so raw (non-reference) log-prob comparisons trivially favor short answers regardless
+of content; DPO's own reward is immune to this by construction but the training gradient isn't,
+and mean answer length collapsed 33.9→16.5 tokens with some qualitative answers going terse/vague.
+Forgetting compounded fast: pretrain ppl 40.10→44.82 (+11.8% further) in just 91 steps. Full
+writeup + before/after table: `docs/results/finetune_report.md` Part C. Follow-ups flagged, not
+blocking phase 9: root-cause the MPS slowdown, length-balance/normalize before trusting
+reward_margin on a longer run, then a completed-epoch re-run. **PHASE 8 DONE. NEXT: phase 9
+(capstone), or the multi-base SFT addendum below as a bonus first.**
 
-**Planned addendum (user-requested, after Part C):** SFT-on-many-bases — now that each SFT is
+**Earlier this session, Part B (2026-07-19, LoRA from scratch — D-052):** built LoRA end-to-end
+(no peft): `src/llmlab/train/lora.py` (`LoRALinear` = frozen base + `(α/r)·BA`, B=0-init,
+apply/merge/state, attn/attn+ffn/ffn presets), `SFTConfig.lora` + LoRA branch in `SFTTrainer`
+(adapter-only optimizer + checkpoints), `src/llmlab/train/sft_infer.py` `load_finetuned`
+(reconstructs base+adapter; eval/chat refactored onto it), `scripts/compare_finetune.py`, 3
+configs, `tests/test_lora.py` (+10, suite **183 pass**). Ran the rank+placement sweep (r8/r32
+attn, r8 attn+ffn). **Result: LoRA is 13–53× cheaper in AdamW optimizer memory (116.6MB→
+2.2–8.9MB) and competitive-to-better in quality — r8 attn+ffn (val 3.777) beat the full FT
+(3.828); placement > rank.** Adapters are 0.77–2.98MB vs full FT's 116.7MB ckpt. Two real bugs
+caught by running (bf16-autocast dtype clash → `F.linear`; CPU/MPS device placement →
+`model.to(device)`) that the fp32/cpu tests missed; 8 stale registry rows from the crashed
+pre-fix launches removed by hand. Report: `docs/results/finetune_report.md` Part B.
+
+**Planned addendum (user-requested, unblocked now that Part C is done):** SFT-on-many-bases — now that each SFT is
 ~2 min, fine-tune several pretrained checkpoints to test **"does better pretrain loss predict a
 better SFT model?"**. All ~55 S-tier checkpoints are already LOCAL (no R2 pull). Cleanest set (same
 `model_s.yaml` arch, training-only differences, so directly comparable + drop-in loadable):
@@ -385,7 +411,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 | 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | done |
 | 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | done |
 | 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | done |
-| 8 | Fine-tuning: SFT / LoRA / DPO | `docs/phases/phase8_finetuning.md` | in-progress (Part A/SFT done, B/C todo) |
+| 8 | Fine-tuning: SFT / LoRA / DPO | `docs/phases/phase8_finetuning.md` | done |
 | 9 | Capstone: 100M hero run + report | `docs/phases/phase9_capstone.md` | todo |
 
 ## Phase 0 checklist (done)
@@ -617,7 +643,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 - [x] **Exit criteria met → PHASE 7 DONE (2026-07-18):** CLI end-to-end ✓, ≥2k pairs ✓ (3070),
   ledger consistent ✓, PROGRESS/DECISIONS updated ✓.
 
-## Phase 8 checklist (in-progress)
+## Phase 8 checklist (done)
 
 **Part A — SFT (DONE 2026-07-19, D-051):**
 - [x] Chat format: `src/llmlab/data/chat_format.py` (render/encode with reserved specials
@@ -650,12 +676,38 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 - [x] 2 real bugs caught by running (bf16-autocast dtype → `F.linear`; CPU/MPS device → `.to(device)`);
   8 stale registry rows from crashed pre-fix launches removed. Report: `docs/results/finetune_report.md`.
 
-**Part C — DPO (todo):** preference pairs via the data factory (chosen vs deliberately-worse
-rejected), `src/llmlab/train/dpo.py` (policy vs frozen ref, β·log-ratio), train from the SFT ckpt,
-track reward margins & KL drift, eval battery again.
+**Part C — DPO from scratch (DONE 2026-07-19, D-053):**
+- [x] Preference pairs via the data factory: `tools/data_factory/seeds.py` new `sft_pairs` seed
+  kind + `tasks/dpo_dictionary_pairs.yaml` — reuse the 2916 existing SFT pairs as `chosen`,
+  generate ONLY `rejected` (rotating wrong_fact/verbose/off_format failure modes; DeepSeek
+  v4-flash, $0.20 for 2884 pairs). `scripts/build_dpo_pairs.py` joins them (deterministic seed-id
+  re-derivation, no sidecar file) → `data/dpo/dictionary_pairs/{train,val}.jsonl` (2740/144).
+- [x] `src/llmlab/data/dpo_loader.py` (`DPODataset`, paired chosen/rejected masking) +
+  `src/llmlab/train/dpo.py` (`sequence_logprobs`, `dpo_loss` — policy vs frozen ref, β·log-ratio,
+  reward/margin/accuracy/KL diagnostics) + `src/llmlab/train/{dpo_config,dpo_trainer}.py`
+  (`DPOTrainer`: policy+reference both warm-started from the Part-A SFT checkpoint) +
+  `scripts/{dpo,eval_dpo}.py` + `configs/dpo_s_dictionary.yaml`. +10 tests (`tests/test_dpo.py`),
+  full suite **193 pass**.
+- [x] `notebooks/09_dpo_from_scratch.ipynb` — derives the loss from the KL-regularized RLHF
+  objective (closed-form optimal policy → invert for the reward → substitute into Bradley-Terry,
+  Z(x) cancels → maximum likelihood = the DPO loss), sanity-checks the real code with toy numbers,
+  runs a real preference triple, ends with the real run's results. Executes cleanly end to end.
+- [x] Ran `20260719_p8_dpo-s-dictionary`: **stopped early at step 91/172 (53% of 1 epoch) on
+  purpose** — a real, non-batch-shape-explained MPS per-step slowdown plus an already-saturated
+  val signal (reward_accuracy 79%→95.8%, margin 0.04→8.97 by step 75) meant continuing risked an
+  unsupervised multi-hour run for little extra signal; interrupted cleanly via SIGINT.
+- [x] Eval battery (`scripts/eval_dpo.py`, `eval_dpo.json`): reward_accuracy 95.8% vs the frozen
+  SFT reference, stop-rate 82%→99%, **pretrain ppl 40.10→44.82 (+11.8% further forgetting)**. A
+  reference-free raw-log-prob check caught a genuine **length confound** (rejected responses
+  average ~461 tokens vs chosen's ~59, biasing raw log-prob comparisons toward short answers
+  regardless of content) — honestly reported, not buried, alongside the real stop-rate win.
+  Table: `docs/results/finetune_report.md` Part C.
 
-**Exit criteria (M4, not yet met):** chat REPL demo ✓ (Part A), before/after table ✓ (Parts A+B),
-LoRA ✓ (Part B), DPO done, all runs registered, decisions logged. M4 declared when C lands.
+**Exit criteria (M4): MET, DECLARED 2026-07-19.** Chat REPL demo ✓ (Part A), before/after table
+✓ (Parts A/B/C), LoRA ✓ (Part B), DPO ✓ (Part C), all runs registered, decisions logged
+(D-051/D-052/D-053). Follow-ups flagged for a future longer DPO run (not blocking): root-cause
+the MPS slowdown, length-balance/normalize the preference data/loss before trusting
+`reward_margin` on a complete-epoch re-run.
 
 ## Rework queue (see CLAUDE.md "Change management")
 
@@ -674,6 +726,20 @@ LoRA ✓ (Part B), DPO done, all runs registered, decisions logged. M4 declared 
 
 ## Parking lot (future ideas, deliberately not scheduled)
 
+- **Complete-epoch DPO re-run, after two fixes** (spawned by D-053): the phase-8 Part C run
+  (`20260719_p8_dpo-s-dictionary`) was stopped at step 91/172 (53% of 1 epoch) on a real,
+  non-batch-shape MPS per-step slowdown (~4s/step→~15-30s/step, not root-caused) plus an
+  already-saturated training signal. Before a longer/bigger DPO run (e.g. for phase 9): (a)
+  root-cause the slowdown (bisect: extra reference forward passes vs long sequences vs genuine
+  M4 thermal throttling); (b) fix the length confound found in eval (rejected responses average
+  ~461 tokens vs chosen's ~59, biasing raw log-prob/margin toward "shorter wins" regardless of
+  content) by length-normalizing the loss (SimPO-style, `logp / len`) — a 2026-07-19 discussion
+  session's per-failure-mode breakdown (`docs/learnings/20260719_phase8-dpo-deep-dive.md` §3c)
+  sharpened this: `wrong_fact` (length-matched) only hit 87.2% reward_accuracy/1.69 margin vs
+  `off_format`/`verbose` (both longer) at ~100%/5.6-20.1 margin — so also (c) rebalance/upweight
+  `wrong_fact` so the model doesn't finish learning length faster than facts. DPO's mechanics
+  themselves (loss, trainer, eval) are proven correct and don't need changing — only the
+  data/compute profile does.
 - **Clean LoRA rank sweep** (spawned by the 2026-07-19 discussion session): our r8-vs-r32 sweep held
   **α=16 fixed**, so the scaling `α/r` differed (2.0 vs 0.5) — not a pure rank comparison. A clean
   rerun should hold `α/r` constant (α ∝ r). Doesn't change any Part-B conclusion (r8≈r32 was a tie;
@@ -715,6 +781,18 @@ from the phase-2 tokenizer study (`20260710_p2_tokenizer-*`) are also in the reg
 
 ## Notes for next session
 
+- **Phase 8 is fully done (2026-07-19), M4 declared.** Next session should either (a) read
+  `docs/phases/phase9_capstone.md` and start the capstone (100M L-tier hero run + report), or
+  (b) do the user-requested multi-base SFT addendum first (bonus, see the top-of-file note) —
+  ask the user which. `docs/results/recipe.md` (written end of phase 5, consolidated through
+  phase 8's own findings) is the input for assembling phase 9's starting config — read it before
+  writing any phase-9 config. Phase 8's fine-tuning stack (`chat_format`/`sft_loader`/`dpo_loader`,
+  `SFTTrainer`/`DPOTrainer`, `lora.py`, `sft_infer.load_finetuned`, `eval_sft.py`/`eval_dpo.py`)
+  is all reusable as-is on the L-tier capstone model — nothing here needs to change for a bigger
+  base, only the config's `model_config`/`base_checkpoint` paths. If DPO comes up again on a
+  bigger/longer run, first read D-053's flagged follow-ups (MPS per-step slowdown root cause,
+  length-balance the rejected generation or length-normalize the loss) before trusting a raw
+  `reward_margin` number.
 - **Phase 7 factory is BUILT + BOTH backends live/validated (2026-07-18, D-048 + execution
   notes); the remaining work is GENERATION at scale.** Setup is DONE: DeepSeek key is in `.env`
   (cheap `deepseek-chat`, ~$0.35/3k, $2 budget), Ollama is installed from its **direct binary**

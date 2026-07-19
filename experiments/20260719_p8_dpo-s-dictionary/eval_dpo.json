@@ -1,0 +1,64 @@
+{
+  "dpo_run": "20260719_p8_dpo-s-dictionary",
+  "sft_run": "experiments/20260719_p8_sft-s-dictionary",
+  "preference_reward_accuracy": {
+    "sft_as_policy": {
+      "reward_accuracy": 0.0,
+      "reward_margin": 0.0
+    },
+    "dpo_as_policy": {
+      "reward_accuracy": 0.9583333333333334,
+      "reward_margin": 8.969356218973795
+    }
+  },
+  "raw_logprob_preference": {
+    "sft": {
+      "accuracy": 0.9583333333333334,
+      "mean_logprob_gap": 623.7391764322916
+    },
+    "dpo": {
+      "accuracy": 0.9583333333333334,
+      "mean_logprob_gap": 713.4327324761284
+    }
+  },
+  "instruction_following": {
+    "base": {
+      "n": 100,
+      "stop_rate": 0.0,
+      "mean_answer_len": 64.0
+    },
+    "sft": {
+      "n": 100,
+      "stop_rate": 0.82,
+      "mean_answer_len": 33.87
+    },
+    "dpo": {
+      "n": 100,
+      "stop_rate": 0.99,
+      "mean_answer_len": 16.5
+    }
+  },
+  "dictionary_retention": {
+    "base": {
+      "mc_accuracy": 0.265,
+      "mc_chance": 0.25,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "sft": {
+      "mc_accuracy": 0.295,
+      "mc_chance": 0.25,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "dpo": {
+      "mc_accuracy": 0.33,
+      "mc_chance": 0.25,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "note": "definition_completion_ppl omitted pending RW-6 (corrupted-text bug)."
+  },
+  "forgetting": {
+    "pretrain_val_ppl_sft_end": 40.09836374391979,
+    "pretrain_val_ppl_dpo_start": 40.11519799977923,
+    "pretrain_val_ppl_dpo_end": 44.82213686306277
+  }
+}

@@ -1,0 +1,62 @@
+# Phase 8 Part C — generate REJECTED responses for DPO preference pairs.
+# The "chosen" side is NOT generated here: it reuses the already-validated phase-7 SFT pairs
+# (data/sft/sft_dictionary_qa/train.jsonl) as-is. This task only produces the deliberately-worse
+# "rejected" half; scripts/build_dpo_pairs.py joins the two back together by seed id.
+name: dpo_dictionary_pairs
+target_count: 2916
+
+seed_source: data/sft/sft_dictionary_qa/train.jsonl
+seed_kind: sft_pairs
+seed_term_field: word
+
+seeds_per_prompt: 12
+
+schema:
+  instruction: str         # echoed back unchanged from the seed, for a sanity join-check
+  response: str             # the REJECTED (deliberately worse) answer
+  meta:
+    word: str
+    style: str              # here "style" doubles as the failure-mode axis (see style_axes)
+
+# Rotated per BATCH (not per item) — see prompt.py/factory.py's rotation. With ~243 batches this
+# spreads the ~2916 rejected pairs roughly evenly across the three failure modes.
+style_axes: [wrong_fact, verbose, off_format]
+
+# One rejected response per (word, failure_mode) — matches the chosen side's own dedup shape.
+dedup_key: meta.word + meta.style
+
+instructions: |
+  For each source item you are given an INSTRUCTION and a GOOD reference answer. Your job is to
+  write a REJECTED response for the SAME instruction — a response a preference-tuning dataset
+  would rank WORSE than the good one. Do NOT simply refuse or say you can't help; produce a
+  plausible-looking but genuinely worse answer, in the failure mode named by "STYLE for THIS
+  batch" below:
+    - wrong_fact: confidently state an INCORRECT definition or fact about the word (a wrong part
+      of speech, a wrong meaning, a fabricated etymology, etc.) while sounding just as fluent and
+      authoritative as the good answer. Do not hedge or signal uncertainty.
+    - verbose: give a technically-not-wrong but badly bloated answer — 3-5x longer than needed,
+      padded with filler, repetition, and irrelevant tangents, that eventually buries the actual
+      meaning.
+    - off_format: do NOT actually answer the question — instead ramble in unrelated prose, answer
+      a different word than the one asked about, or trail off as if continuing a book passage
+      instead of responding to the user. Still sound like natural text, not an error message.
+  Set `instruction` to the SAME instruction text you were given (do not alter it). Set
+  `meta.word` to the source word and `meta.style` to the failure mode you used.
+
+few_shot:
+  - seed_id: dpo-xxxxxxxx
+    instruction: "What does 'ephemeral' mean?"
+    response: "Ephemeral means something that is built to last for centuries, like a stone
+      monument — the word comes from a root meaning 'permanent record'."
+    meta:
+      word: ephemeral
+      style: wrong_fact
+
+quality:
+  min_response_chars: 20
+  max_response_chars: 2500     # verbose failure mode needs real headroom (observed 1.6-2.1k chars)
+  min_instruction_chars: 5
+  max_instruction_chars: 200
+  require_lang: en
+  forbid_refusals: true         # a rejected answer must still be a genuine (bad) attempt, not a refusal
+  require_seed_term_in_response: false   # off_format rejections may legitimately never mention the word
