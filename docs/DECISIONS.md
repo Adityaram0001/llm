@@ -2291,3 +2291,61 @@ reusable as a focused A-vocabulary set. Both dirs gitignored; push to R2 before 
 
 **Lesson:** sampling a subset from any sorted corpus in file order silently skews to the front of
 the sort key — shuffle-by-default is the safe posture. Now the factory's default.
+
+## D-051 — Phase 8 Part A (SFT): full fine-tune of p4_s_baseline into a dictionary-QA chat model; behavior changed, knowledge didn't, forgetting +14.8%  (2026-07-19, phase 8)
+**Decision:** Built the SFT stack from scratch (no trl/peft) and ran the project's first
+supervised fine-tune. New code: `src/llmlab/data/chat_format.py` (render/encode a chat-ML
+conversation with the phase-2-reserved specials `<|user|>`=2/`<|assistant|>`=3/`<|endoftext|>`=0/
+`<|pad|>`=1, D-014), `src/llmlab/data/sft_loader.py` (`SFTDataset`: tokenize → right-pad → build
+an **assistant-only loss mask**), `src/llmlab/train/{sft_config,sft_trainer}.py` (`SFTTrainer`:
+warm-start from a pretrain checkpoint, fresh AdamW, epoch loop, masked loss, a live
+catastrophic-forgetting probe), `scripts/{sft,eval_sft,chat}.py`, `configs/sft_s_dictionary.yaml`,
+`tests/test_sft.py` (+15 tests, full suite 173 pass). Run: `20260719_p8_sft-s-dictionary`
+(base `20260711_p4_s-baseline`, lr 2e-5, 3 epochs / 276 steps, bf16, ~1m44s on the M4).
+
+**Key implementation choices (with the teaching reason):**
+- **Loss masking via the model's existing `ignore_index=-1`.** `GPT.forward`'s
+  `cross_entropy(..., ignore_index=-1)` already existed; SFT masking is just setting non-assistant
+  (and pad) targets to -1. Only assistant *content* + the turn-ending `<|endoftext|>` are
+  supervised (the model learns to answer AND to stop). The mask is exact by construction — each
+  turn's content is encoded with `add_special_tokens=False` and the marker IDs are spliced in, so
+  it never infers a boundary from separately-encoded token counts (the exact fragility behind
+  RW-6). Verified: segment-wise encoding == a single `encode()` of the rendered string
+  (`test_segmentwise_encoding_matches_monolithic`).
+- **Pad, not pack.** Dictionary-QA examples are tiny (p99 ~67 content tokens; max 93), so packing
+  saves almost nothing and muddies the loss-mask visualization. Right-padding is correction-free
+  under a causal model: real tokens never attend to later pad tokens, and pad targets are ignored.
+  Dynamic per-batch padding (to the batch max, not a global max) keeps wasted compute low.
+- **A separate `SFTTrainer`, not the pretrain `Trainer`.** SFT is epoch-based over a finite masked
+  set with a warm start and a dual eval (masked SFT val + frozen pretrain-val ppl) — genuinely
+  different control flow. Reused what actually transfers: `build_param_groups` (no wd on
+  norms/embeddings), the checkpoint format, the registry-row convention.
+- **lr 2e-5 / 3 epochs** (spec's 1e-5..5e-5): low LR is the primary catastrophic-forgetting guard.
+
+**Result (`experiments/20260719_p8_sft-s-dictionary/`, `eval_sft.json`, `docs/results/finetune_report.md`):**
+SFT val loss 5.54→3.83. The headline is a **behavior flip, not a knowledge gain**: instruction
+**stop-rate 0%→80%** (base continues in book-prose and never ends a turn; SFT answers and emits
+`<|endoftext|>`), mean answer length 64→34 tokens. Dictionary MC accuracy barely moved
+(26.5%→29.5%, both near the 25% chance floor) and cloze stayed 0% — a 10M ablation base has no
+real definitional knowledge for SFT to surface; SFT teaches the *protocol*, not the content.
+**Catastrophic forgetting is real and was measured live:** frozen books+dict pretrain-val ppl rose
+34.93→40.10 (**+14.8%**) as the model specialized — the SFT-loss-down / pretrain-ppl-up divergence
+the phase spec asks students to see. `definition_completion_ppl` was deliberately NOT quoted (RW-6:
+corrupted-text bug); MC/cloze use an RW-6-verified-safe boundary shape.
+
+**Options considered:** pack vs pad (pad, for clarity at this length); reuse `Trainer` vs a
+dedicated `SFTTrainer` (dedicated — the loop is genuinely different); supervise the assistant EOT
+or not (yes — the model must learn to stop, and the 0%→80% stop-rate is the payoff); base =
+`p4_s_baseline` vs a best-quality ablation run (baseline, for a clean/comparable reference — user
+chose this).
+
+**Why this matters beyond the run:** Part A's deliverables (chat template, exact loss masking,
+forgetting probe, chat REPL) are the reusable mechanics for Parts B/C and the phase-9 capstone,
+where SFT will land on a 100M model with real knowledge worth eliciting. This run is honest about
+what SFT can and cannot do at 10M: it fixes *how* the model responds, not *what* it knows.
+
+**Impacts:** phase 8 Part A done; Parts B (LoRA) + C (DPO) remain, so **milestone M4 is NOT yet
+declared** (it lands when the phase is complete). RW-6 was skirted (not fixed) by quoting only the
+safe eval metrics — it remains open and tagged for whenever `src/llmlab/eval/` is next *modified*.
+**Revisit if:** forgetting needs bounding for the capstone — try mixing pretrain data into the SFT
+stream, fewer epochs, or LoRA (Part B; a frozen base can't drift as far).

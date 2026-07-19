@@ -1,0 +1,33 @@
+{
+  "sft_run": "20260719_p8_sft-s-dictionary",
+  "base_checkpoint": "experiments/20260711_p4_s-baseline/ckpt/best.pt",
+  "instruction_following": {
+    "base": {
+      "n": 100,
+      "stop_rate": 0.0,
+      "mean_answer_len": 64.0
+    },
+    "sft": {
+      "n": 100,
+      "stop_rate": 0.8,
+      "mean_answer_len": 34.26
+    }
+  },
+  "dictionary_retention": {
+    "base": {
+      "mc_accuracy": 0.265,
+      "mc_chance": 0.25,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "sft": {
+      "mc_accuracy": 0.295,
+      "mc_chance": 0.25,
+      "cloze_exact_match_accuracy": 0.0
+    },
+    "note": "definition_completion_ppl omitted pending RW-6 (corrupted-text bug)."
+  },
+  "forgetting": {
+    "pretrain_val_ppl_start": 34.93317757070178,
+    "pretrain_val_ppl_end": 40.09836374391979
+  }
+}

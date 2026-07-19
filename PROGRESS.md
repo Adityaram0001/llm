@@ -3,15 +3,29 @@
 > Every Claude session reads this first and updates it last. Keep it honest and terse.
 > Status values: `todo` | `in-progress` | `done` | `blocked` | `skipped`
 
-**Active phase:** Phases 0-6 are **done** (milestones M1/M2/M3 declared). **Phase 7
-(`docs/phases/phase7_data_factory.md`) is now DONE (2026-07-18, D-048/D-049/D-050)** — factory
-built + both backends validated + **3,070 diversified SFT pairs generated & exported** (DeepSeek
-v4-flash non-thinking, ~$0.17 total incl. an archived a-words first run). Exit criteria met.
-**Phase 8 (fine-tuning: SFT/LoRA/DPO) is next** — its
-first input is `data/sft/sft_dictionary_qa/{train,val}.jsonl` (gitignored; push to R2 before any
-cloud run). Wave G's deferred dictionary-ablation item (D-045:
-"does the dictionary in the mix improve a 'define X' eval?") remains unblocked but unrun (parked,
-see parking lot).
+**Active phase:** Phases 0-7 are **done** (milestones M1/M2/M3 declared). **Phase 8
+(`docs/phases/phase8_finetuning.md`, fine-tuning: SFT/LoRA/DPO) is IN PROGRESS — Part A (SFT) is
+DONE (2026-07-19, D-051)**; Parts B (LoRA from scratch) and C (DPO) remain, so **milestone M4 is
+NOT yet declared** (it lands when the whole phase is complete). Wave G's deferred
+dictionary-ablation item (D-045: "does the dictionary in the mix improve a 'define X' eval?")
+remains unblocked but unrun (parked, see parking lot).
+
+**This session (2026-07-19, phase 8 Part A — SFT):** built the whole from-scratch SFT stack (no
+trl/peft) and ran the project's first supervised fine-tune. New code: `src/llmlab/data/
+{chat_format,sft_loader}.py` (chat-ML template with the phase-2-reserved specials + an
+**assistant-only loss mask**, exact-by-construction so it dodges RW-6's boundary fragility),
+`src/llmlab/train/{sft_config,sft_trainer}.py` (`SFTTrainer`: warm-start from a pretrain ckpt,
+fresh AdamW, epoch loop, masked loss, **a live catastrophic-forgetting probe**), `scripts/
+{sft,eval_sft,chat}.py`, `configs/sft_s_dictionary.yaml`, `tests/test_sft.py` (+15 tests, full
+suite **173 pass**). Run `20260719_p8_sft-s-dictionary` (base `p4_s_baseline`, lr 2e-5, 3 epochs,
+~1m44s on the M4). **Result (D-051): a behavior flip, not a knowledge gain.** SFT val loss
+5.54→3.83; instruction **stop-rate 0%→80%** (base continues in book-prose forever, SFT answers &
+emits `<|endoftext|>`), answer length 64→34 tok. Dict MC accuracy barely moved (26.5%→29.5%, both
+near 25% chance), cloze 0% — a 10M base has no real definitional knowledge for SFT to surface; SFT
+teaches the protocol, not the content. **Catastrophic forgetting measured live: pretrain-val ppl
+34.93→40.10 (+14.8%).** The chat REPL (`scripts/chat.py`) works — the payoff moment. Eval quoted
+only RW-6-safe metrics (`definition_completion_ppl` skipped). Report: `docs/results/
+finetune_report.md`. **NEXT: Part B (LoRA from scratch) then Part C (DPO).**
 
 **This session (2026-07-18, phase 7 — data factory BUILD):** built the whole backend-agnostic
 generation pipeline in `tools/data_factory/` (`spec/seeds/prompt/backends/validate/ledger/
@@ -348,7 +362,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 | 5 | Ablation lab (research techniques) | `docs/phases/phase5_ablations.md` | done |
 | 6 | Evaluation suite | `docs/phases/phase6_evaluation.md` | done |
 | 7 | Data factory (DeepSeek-assisted) | `docs/phases/phase7_data_factory.md` | done |
-| 8 | Fine-tuning: SFT / LoRA / DPO | `docs/phases/phase8_finetuning.md` | todo |
+| 8 | Fine-tuning: SFT / LoRA / DPO | `docs/phases/phase8_finetuning.md` | in-progress (Part A/SFT done, B/C todo) |
 | 9 | Capstone: 100M hero run + report | `docs/phases/phase9_capstone.md` | todo |
 
 ## Phase 0 checklist (done)
@@ -580,6 +594,35 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 - [x] **Exit criteria met → PHASE 7 DONE (2026-07-18):** CLI end-to-end ✓, ≥2k pairs ✓ (3070),
   ledger consistent ✓, PROGRESS/DECISIONS updated ✓.
 
+## Phase 8 checklist (in-progress)
+
+**Part A — SFT (DONE 2026-07-19, D-051):**
+- [x] Chat format: `src/llmlab/data/chat_format.py` (render/encode with reserved specials
+  `<|user|>`/`<|assistant|>`/`<|endoftext|>`/`<|pad|>`; `add_generation_prompt` for inference).
+- [x] `src/llmlab/data/sft_loader.py`: tokenize `data/sft/*/train.jsonl` → right-pad → **assistant-only
+  loss mask** (non-assistant + pad targets = -1, honored by the model's existing `ignore_index=-1`).
+  Pad-not-pack (examples are tiny); mask exact-by-construction (dodges RW-6's boundary fragility).
+- [x] `src/llmlab/train/{sft_config,sft_trainer.py}` + `scripts/sft.py`: warm-start from
+  `p4_s_baseline`, lr 2e-5, 3 epochs, bf16; tracks **frozen pretrain-val ppl** alongside SFT loss
+  (catastrophic forgetting, live). Run `20260719_p8_sft-s-dictionary`, ~1m44s on the M4.
+- [x] Eval before/after (`scripts/eval_sft.py`, `eval_sft.json`): stop-rate 0%→80%, answer len
+  64→34, dict MC 26.5%→29.5%, **pretrain ppl 34.93→40.10 (+14.8% forgetting)**. RW-6-safe metrics
+  only (`definition_completion_ppl` skipped). Table: `docs/results/finetune_report.md`.
+- [x] `scripts/chat.py` — minimal REPL (single- and multi-turn, one-shot pipe mode). Works. 🎉
+- [x] +15 tests (`tests/test_sft.py`), full suite **173 pass**.
+- [ ] (deferred nice-to-have) notebook visualizing a masked example + the forgetting curve.
+
+**Part B — LoRA from scratch (todo):** `src/llmlab/train/lora.py` (W + (α/r)·BA, freeze base, A~N/B=0,
+merge-back), redo Part-A SFT with LoRA (r=8/32 sweep, attn-only vs attn+ffn), compare quality /
+trainable params / peak mem / tok/s / ckpt size vs full FT.
+
+**Part C — DPO (todo):** preference pairs via the data factory (chosen vs deliberately-worse
+rejected), `src/llmlab/train/dpo.py` (policy vs frozen ref, β·log-ratio), train from the SFT ckpt,
+track reward margins & KL drift, eval battery again.
+
+**Exit criteria (M4, not yet met):** chat REPL demo ✓ (Part A), before/after table ✓ (Part A),
+LoRA + DPO done, all runs registered, decisions logged. M4 declared when B+C land.
+
 ## Rework queue (see CLAUDE.md "Change management")
 
 | ID | What | Why | Fix in phase | Status |
@@ -591,7 +634,7 @@ general-purpose with RW-4 in mind, so it shouldn't need a rewrite when that happ
 
 **Open item for next session: `scripts/cloud/gpuhub_setup.sh` has an uncommitted local fix** (D-029's PATH/rclone fix) that was never pushed to GitHub — this caused the exact same bug to reproduce when setting up the RTX 5090 instance via the curl-from-GitHub one-liner (worked around via `scp` instead, see D-032). Ask the user whether to commit+push this session's changes (git commits are user-initiated per CLAUDE.md — not done automatically). Projected the L-tier hero run (2.1B tokens) at ~13.7hr/~$3.43 on this tier alone — cheaper than the original 5090 "$10-20" estimate; **update `configs/train_s_*.yaml` to `micro_batch=32` before any real run on this tier** (Mac's `micro_batch=16` default isn't gpuhub's optimum). `scripts/cloud/remote.env` is now filled in for this instance so `./scripts/cloud/sync_down.sh` is one command. **Remaining:** repeat only the CUDA-version check on an actual RTX 5090 once gpuhub has inventory (everything else already proven); also flagged (not fixed) — `GPT.forward()` blocks phase 5 Wave B's length-extrapolation probe (hard-rejects seq_len > `max_seq_len`), and `find_batch_size.py`'s `mem_gb` column is unreliable (see D-030). Live playbook: `docs/CLOUD_GPUHUB.md`. | D-017 (superseded for the active path by D-027) | 4 | in-progress (essentially done pending 5090 availability) |
 | RW-5 | `GPT.forward()` hard-rejects any sequence longer than `model_config.max_seq_len` (`ValueError`) — blocked (a) phase 5 Wave B's length-extrapolation probe and (b) the phase-9 capstone's chat-usability goal (real, not just extrapolated, 2k+ context). **Part (a) DONE 2026-07-12 (D-037)**: `forward()`'s guard now only applies to `learned`/`sinusoidal` (physically bounded); rope/alibi/none can run past `max_seq_len` at eval time. Probe ran clean: ALiBi improves with length (ppl 32.56→31.67 @512→2048), RoPE degrades gracefully (33.24→45.68), NoPE collapses (40→732) — real data point for part (b)'s decision, arguing ALiBi deserves consideration alongside RoPE. **Part (b) still open**: `model_l.yaml`'s `max_seq_len` (currently 512, same as S/M) should be deliberately reconsidered for the L-tier capstone per the 2026-07-12 discussion (`docs/learnings/20260712_model-config-strategy.md`) — likely ~2048 native, and now also an open question of RoPE vs ALiBi for that tier given D-037's result | Discovered incidentally while GPU-benchmarking seq_len scaling (D-030); RoPE (already the project default, D-016) is one of the position encodings best suited to this, so the fix is well-aligned with existing choices | 5 (done) / 9 (L-tier capstone max_seq_len + pos_encoding decision, still open) | in-progress |
-| RW-6 | `src/llmlab/eval/scoring.py`'s `encode_prompt_continuation` silently assumes the separately-encoded prompt is a token-prefix of the jointly-encoded (prompt+continuation) sequence — false whenever a BPE merge pulls the prompt's trailing character into a token that belongs to the continuation. **Verified exhaustively (2026-07-17, discussion session, D-047): 3,281/3,281 (100%) of `dictionary_probes.py`'s definition-completion examples hit this** (prompt always ends `": "`) — the continuation gets silently corrupted (a real word, e.g. "excessive", dropped entirely), so `definition_completion_ppl` in EVERY `eval_results.json` written so far (baseline + all 3 milestone checkpoints) is computed on mangled text and must not be quoted as-is. Cloze/domain-probes/HellaSwag/LAMBADA-style are all verified NOT affected (different, safe prompt/continuation boundary shape). A second, smaller issue in the same audit: the MC probe doesn't use this helper at all and tokenizes each choice standalone (~10% get a different, out-of-context token count — doesn't corrupt content, just adds noise). **Fix path spelled out in D-047**: split by character offset (`Tokenizer.encode(...).offsets`) instead of by separately-encoded token count. Not fixed yet — discussion sessions change no code | Found while writing the phase-6 learnings note, by checking the helper's own docstring claim against the real tokenizer instead of trusting it | 6 (whenever `src/llmlab/eval/` is next touched) | todo |
+| RW-6 | `src/llmlab/eval/scoring.py`'s `encode_prompt_continuation` silently assumes the separately-encoded prompt is a token-prefix of the jointly-encoded (prompt+continuation) sequence — false whenever a BPE merge pulls the prompt's trailing character into a token that belongs to the continuation. **Verified exhaustively (2026-07-17, discussion session, D-047): 3,281/3,281 (100%) of `dictionary_probes.py`'s definition-completion examples hit this** (prompt always ends `": "`) — the continuation gets silently corrupted (a real word, e.g. "excessive", dropped entirely), so `definition_completion_ppl` in EVERY `eval_results.json` written so far (baseline + all 3 milestone checkpoints) is computed on mangled text and must not be quoted as-is. Cloze/domain-probes/HellaSwag/LAMBADA-style are all verified NOT affected (different, safe prompt/continuation boundary shape). A second, smaller issue in the same audit: the MC probe doesn't use this helper at all and tokenizes each choice standalone (~10% get a different, out-of-context token count — doesn't corrupt content, just adds noise). **Fix path spelled out in D-047**: split by character offset (`Tokenizer.encode(...).offsets`) instead of by separately-encoded token count. Not fixed yet — discussion sessions change no code. **Phase 8 Part A (2026-07-19, D-051) USED the eval suite but did not MODIFY it, so RW-6 was skirted not fixed: `scripts/eval_sft.py` quotes only the RW-6-safe metrics (MC accuracy, cloze) and explicitly omits `definition_completion_ppl`.** Still open; fix when `src/llmlab/eval/` is next *modified* | Found while writing the phase-6 learnings note, by checking the helper's own docstring claim against the real tokenizer instead of trusting it | 6 (whenever `src/llmlab/eval/` is next touched) | todo |
 | RW-4 | Domain corpus expansion (finance/self-help/wisdom). **Corpus + ablation DONE 2026-07-16 (D-045)**: 62 PD books curated from local Gutenberg catalog data (finance/investing/economics/business + self-help/personal-development/wisdom-practical categories), `domain`-tagged routing added to `acquire.build_books`/`scripts/tokenize_corpus.py`, `MixedSourceLoader`'s existing per-source weights used unmodified. Domain-mix ablation (0/10/25/50% share) found a strictly monotonic general-val-loss cost — recommend **10-25% share** for the capstone (not the original 10-20% target's upper bound, and well short of 50%). **Eval probes DONE 2026-07-17 (D-046)**: `src/llmlab/eval/domain_probes.py` + 24 hand-written items (`data/eval/domain_probes.json`) — this baseline (0% domain share) scores exactly at chance on them, the expected null result. **Still open:** the Wave G "does dictionary-in-the-mix help a define-X eval" ablation is now unblocked but not yet RUN; growing the 6.76M-token domain pool before L-tier's much bigger token budget is an open question (recipe.md flags it) | User wants a finance/wisdom-steered model (2026-07-11 discussion, see `docs/learnings/20260711_gpu-vocab-datamix.md`) | 9 (capstone domain-share decision) | in-progress (corpus+ablation+probes done, capstone decision open) |
 | RW-7 | Data-factory generation optimizations, to apply BEFORE the real ≥2k run (D-049): (a) set the Ollama backend's `options.num_ctx` high enough (≥8192) that larger Gemma batches don't **silently truncate** output past ~4096 default ctx → broken JSON → whole-batch failure; (b) give per-backend default `seeds_per_prompt` (Gemma ~20–25, DeepSeek ~50–80) so users needn't remember `--seeds-per-prompt` (the flag already works today); (c) set `DEEPSEEK_MODEL=deepseek-v4-flash` explicitly (the `deepseek-chat` alias deprecates 2026-07-24 but auto-maps, so non-urgent), keeping NON-thinking mode for grounded generation | Throughput benchmark + spec review this session (D-049): Gemma bound by 8k output cap + Ollama's silent num_ctx truncation; DeepSeek cost is output-token-dominated + batch-invariant so batch for wall-clock not money | 7 (before the ≥2k generation run) | **(c)+DeepSeek max_tokens DONE (D-050)**; (a) Ollama num_ctx + (b) per-backend seeds_per_prompt defaults still open — only needed before a large-batch LOCAL Gemma run (the flag works today) |
 
